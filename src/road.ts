@@ -10,12 +10,17 @@ import * as bs from "./base.ts"
 
 
 
+/**
+ * Helper alias for {@link fs.constants} to provide a more convenient way to access file system constants.
+ */
+export const FIELD = fs.constants
+
+
 
 /**
  * Subclass of {@link bs.InsErr} that represents an error thrown from this specific module of the library
  */
-export class RdErr extends bs.InsErr { override name = "Road-Error" }
-
+export class RdErr extends bs.InsErr { override name = "Instrumentality-Road-Error" }
 
 
 
@@ -27,30 +32,20 @@ export class RdErr extends bs.InsErr { override name = "Road-Error" }
  * @throws If the file mode is unknown, throws a {@link RdErr}.
  */
 export function modeCtor(statmode: number) {
-  switch (statmode & fs.constants.S_IFMT) {
-    case fs.constants.S_IFREG: return File
-    case fs.constants.S_IFDIR: return Folder
-    case fs.constants.S_IFBLK: return BlockDevice
-    case fs.constants.S_IFCHR: return CharacterDevice
-    case fs.constants.S_IFLNK: return SymbolicLink
-    case fs.constants.S_IFIFO: return Fifo
-    case fs.constants.S_IFSOCK: return Socket
+  switch (statmode & FIELD.S_IFMT) {
+    case FIELD.S_IFREG: return File
+    case FIELD.S_IFDIR: return Folder
+    case FIELD.S_IFBLK: return BlockDevice
+    case FIELD.S_IFCHR: return CharacterDevice
+    case FIELD.S_IFLNK: return SymbolicLink
+    case FIELD.S_IFIFO: return Fifo
+    case FIELD.S_IFSOCK: return Socket
     default: throw new RdErr(`Unknown mode type ${statmode} (statmode is most likely corrupted)`)
   }
 }
 
 
-/**
- * Creates a new instance of the appropriate subclass of {@link Road} based on the file mode of the specified path.
- * 
- * @param lookFor The path to check.
- * @returns A new instance of the appropriate subclass of {@link Road}.
- * @throws If the path does not exist, throws a fs {@link Error}.
- */
-export async function factory(lookFor: string) {
-  await fp.access(lookFor, fs.constants.F_OK)
-  return new (modeCtor((await fp.lstat(lookFor)).mode))(lookFor)
-}
+
 /**
  * Creates a new instance of the appropriate subclass of {@link Road} based on the file mode of the specified path.
  *
@@ -59,8 +54,13 @@ export async function factory(lookFor: string) {
  * @throws If the path does not exist, throws a fs {@link Error}.
  */
 export function factorySync(lookFor: string) {
-  fs.accessSync(lookFor, fs.constants.F_OK)
-  return new (modeCtor(fs.lstatSync(lookFor).mode))(lookFor)
+  fs.accessSync(lookFor, FIELD.F_OK)
+  return new (modeCtor(fs.lstatSync(lookFor).mode))(lookFor, false)
+}
+/** Async version of {@link factorySync}. */
+export async function factory(lookFor: string) {
+  await fp.access(lookFor, FIELD.F_OK)
+  return new (modeCtor((await fp.lstat(lookFor)).mode))(lookFor, false)
 }
 
 
@@ -69,7 +69,7 @@ export function factorySync(lookFor: string) {
  * A map that keeps track of locked roads to prevent concurrent modifications. The keys are the absolute paths of the roads, and the values are promises that resolve when the lock is released.
  * 
  * @remarks Don't manually modify this map. Use the {@link Road.initChange} and {@link Road.initChangeSync} methods to acquire and release locks on roads.
- * The reason why this is even exposed is to enable advanced use cases. For read-only purposes, you can use the {@link lockFor} function to check if a road is currently locked.
+ * The reason why this is even exposed is to enable advanced use cases. For read-only purposes, you should use the {@link lockFor} function to await the optional lock on a road.
  */
 export let lockedRoads: Map<string, Promise<void>> | null = null
 /**
@@ -79,7 +79,7 @@ export let lockedRoads: Map<string, Promise<void>> | null = null
  * @returns The promise associated with the locked road, or `undefined` if the road is not currently locked.
  */
 export function lockFor(roadOrPath: Road | string) {
-  return lockedRoads?.get(typeof roadOrPath === "string" ? roadOrPath : roadOrPath.isAt)
+  return lockedRoads?.get(roadOrPath.toString())
 }
 
 
@@ -102,77 +102,57 @@ export abstract class Road {
   /** Returns the OS file type of the file or directory.
    * Return value (OS type) and the type of this instance are not guaranteed to be the same, as the file system may have changed since this instance was created. */
   typeSync() { return (modeCtor(fs.lstatSync(this.isAt).mode)) }
-  /** Async version of {@link typeSync}. Returns the OS file type constructor of the file or directory. */
+  /** Async version of {@link typeSync}. */
   async type() { return (modeCtor((await fp.lstat(this.isAt)).mode)) }
 
-  /** Constructs a new Road instance representing the file or directory at the specified path.
+  /**
+   * Constructs a new Road instance representing the file or directory at the specified path.
    * 
    * @param lookFor The path to the file or directory that this Road instance will represent.
-   * @throws If the specified path does not exist, throws a fs {@link Error}.
+   * @param typeCheck Whether to check if the type of the file or directory at the specified path matches the type of this instance.
+   * This can be skipped for performance reasons if the type is known to be correct, but it is recommended to keep it enabled for safety.
+   * @throws If the specified path does not exist, throws a fs.{@link Error}.
    * @throws If the type of the file or directory at the specified path does not match the type of this instance, throws a {@link RdErr}. Useful for subclasses.
    */
-  constructor(lookFor: string) {
-    fs.accessSync(lookFor, fs.constants.F_OK)
+  constructor(lookFor: string, typeCheck: boolean) {
     this.pointsTo = ph.resolve(lookFor)
-    if (!(this instanceof this.typeSync())) // this check is relevant for subclasses of Road
+    if (typeCheck && !(this instanceof this.typeSync())) // `this` directly refers to the subclass
       throw new RdErr(`Type missmatch: Path '${this.isAt}' is not of constructed type ${this.constructor.name}.`)
   }
 
   /**
    * Verifies that the file or directory represented by this Road instance exists, is of the same type as this instance, and (optionally) is writable.
    * 
-   * @param writeableCheck Whether to check if the file or directory is writable. Defaults to true.
+   * @param expectMode The expected access mode for this Road other than visibility by this process.
    * @returns Result of the verification.
    */
-  verifySync(writeableCheck: boolean = true) {
-    if (!fs.existsSync(this.isAt))
-      return false
+  verifySync(expectMode: number, typeCheck: boolean): boolean {
     try {
-      fs.accessSync(this.isAt, fs.constants.F_OK)
-      fs.accessSync(this.isAt, fs.constants.R_OK)
-      if (writeableCheck)
-        fs.accessSync(this.isAt, fs.constants.W_OK)
-      return this instanceof this.typeSync()
+      fs.accessSync(this.isAt, FIELD.F_OK | expectMode)
+      return typeCheck || this instanceof this.typeSync()
     } catch {
       return false
     }
   }
-  async verify(writeableCheck: boolean = true) {
+  /** Async version of {@link verifySync}. */
+  async verify(expectMode: number, typeCheck: boolean): Promise<boolean> {
     try {
-      await fp.access(this.isAt, fs.constants.F_OK)
-      await fp.access(this.isAt, fs.constants.R_OK)
-      if (writeableCheck)
-        await fp.access(this.isAt, fs.constants.W_OK)
-      return this instanceof (await this.type())
+      await fp.access(this.isAt, FIELD.F_OK | expectMode)
+      return typeCheck || this instanceof (await this.type())
     } catch {
       return false
     }
   }
-  protected async initChange(releaseLock = () => {}) { // using RAII pattern to prevent changes if the file is modified externally during an operation, which would cause data loss or other issues. This is done by acquiring a lock before the operation and releasing it afterward. If the file is modified externally, the lock will prevent the operation from proceeding, and an error will be thrown.
-    if (!await this.verify())
-      throw new RdErr(`Road to '${this.isAt}' (${this.constructor.name}) isn't the same as during construction, can't modify (OS type: ${fs.existsSync(this.isAt) ? this.typeSync().name : 'nonexistent'})`)
-    if (!this.mutable)
-      throw new RdErr(`Attempting to modify road to '${this.isAt}' of type ${this.constructor.name} which's marked as immutable (unrelated to the actual OS file permissions)`)
-    if (!lockedRoads)
-      lockedRoads = new Map<string, Promise<void>>()
-    const lockedPath = this.isAt
-    await (lockedRoads.get(lockedPath) || Promise.resolve())
-    lockedRoads.set(lockedPath, new Promise<void>(res => releaseLock = res))
-    return {
-      [Symbol.dispose]() {
-        releaseLock()
-        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
-        lockedRoads!.delete(lockedPath)
-      },
-      async [Symbol.asyncDispose]() {
-        releaseLock()
-        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
-        lockedRoads!.delete(lockedPath)
-      }
-    }
-  }
-  protected initChangeSync(releaseLock = () => {}) {
-    if (!this.verifySync())
+
+  /**
+   * Creates a disposable lock for the file or directory represented by this Road instance, preventing concurrent modifications.
+   * 
+   * @returns An object with a `dispose` method that releases the lock when called. The lock is automatically released when the object is garbage collected.
+   * @throws If the file or directory is not accessible, is not writable, or (synchronous-only) is already locked by another operation.
+   * @remarks Please use this method with the `using` statement to ensure that the lock is properly released after the operation is complete. This method is intended for internal use and shouldn't be called directly in most cases. (that's why it's protected)
+   */
+  protected initChangeSync() {
+    if (!this.verifySync(FIELD.R_OK | FIELD.W_OK, true))
       throw new RdErr(`Road to '${this.isAt}' (${this.constructor.name}) isn't the same as during construction, can't modify (OS type: ${fs.existsSync(this.isAt) ? this.typeSync().name : 'nonexistent'})`)
     if (!this.mutable)
       throw new RdErr(`Attempting to modify road to '${this.isAt}' of type ${this.constructor.name} which's marked as immutable (unrelated to the actual OS file permissions)`)
@@ -181,6 +161,36 @@ export abstract class Road {
     const lockedPath = this.isAt
     if (lockedRoads.has(lockedPath))
       throw new RdErr(`Road to '${this.isAt}' is currently locked by another operation, can't modify synchronously`)
+    let releaseLock = () => {}
+    lockedRoads.set(lockedPath, new Promise<void>(res => releaseLock = res))
+    return {
+      [Symbol.dispose]() {
+        lockedRoads!.delete(lockedPath)
+        releaseLock()
+        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
+      },
+      async [Symbol.asyncDispose]() {
+        lockedRoads!.delete(lockedPath)
+        releaseLock()
+        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
+      }
+    }
+  }
+  /**
+   * Async version of {@link initChangeSync}.
+   * 
+   * @remarks This async version won't throw if the road is already locked, but will instead wait for the lock to be released before acquiring it.
+   */
+  protected async initChange() {
+    if (!await this.verify(FIELD.R_OK | FIELD.W_OK, true))
+      throw new RdErr(`Road to '${this.isAt}' (${this.constructor.name}) isn't the same as during construction, can't modify (OS type: ${fs.existsSync(this.isAt) ? this.typeSync().name : 'nonexistent'})`)
+    if (!this.mutable)
+      throw new RdErr(`Attempting to modify road to '${this.isAt}' of type ${this.constructor.name} which's marked as immutable (unrelated to the actual OS file permissions)`)
+    if (!lockedRoads)
+      lockedRoads = new Map<string, Promise<void>>()
+    const lockedPath = this.isAt
+    let releaseLock = () => {}
+    await lockFor(lockedPath)
     lockedRoads.set(lockedPath, new Promise<void>(res => releaseLock = res))
     return {
       [Symbol.dispose]() {
@@ -195,68 +205,50 @@ export abstract class Road {
       }
     }
   }
-  existsSync() {
-    return fs.existsSync(this.isAt) && (this instanceof this.typeSync())
-  }
-  async exists() {
-    try {
-      await fp.access(this.isAt, fs.constants.F_OK)
-      return this instanceof (await this.type())
-    } catch {
-      return false
-    }
-  }
-  statsSync() {
-    return fs.lstatSync(this.isAt)
-  }
+  /**
+   * Checks if the file or directory represented by this Road is both visible and of the same type as expected.
+   */
+  existsSync() { return this.verifySync(FIELD.F_OK, true) }
+  async exists() { return this.verify(FIELD.F_OK, true) }
+  /**
+   * @returns The file system stats for the file or directory.
+   * @see {@link fs.lstatSync}
+   */
+  statsSync() { return fs.lstatSync(this.isAt) }
+  /**
+   * @returns The file system stats for the file or directory.
+   * @see {@link fs.promises.lstat}
+   */
   async stats() {
     return fp.lstat(this.isAt)
   }
 
-  depth() {
-    return this.isAt.split(ph.sep).length - 1
-  }
-  parent() {
-    return new Folder(ph.dirname(this.isAt))
-  }
-  ancestors() {
-    const result: Folder[] = []
+  /**
+   * @returns The amount of path segments in the absolute path to the file or directory represented by this Road instance, minus one (i.e., the depth of the file or directory in the file system hierarchy).
+   * @remarks As subclasses of {@link Road} require all paths to be absolute/normalized and valid, this method is guaranteed to return a non-negative integer.
+   */
+  depth() { return this.isAt.split(ph.sep).length - 1 }
+  /** @returns The parent folder of the file or directory represented by this Road instance. */
+  parent() { return new Folder(ph.dirname(this.isAt), false) }
+  *ancestorsIt() {
     let current: Folder = this.parent()
-    while (current.isAt !== current.parent().isAt) {
-      result.push(current)
-      current = current.parent()
+    let parent = current.parent()
+    while (current.isAt !== parent.isAt) {
+      yield current
+      current = parent
+      parent = current.parent()
     }
-    return result
   }
+  ancestors() { return [...this.ancestorsIt()] }
 
-  accessibleSync(mode = fs.constants.F_OK) {
-    try {
-      fs.accessSync(this.isAt, mode)
-      return true
-    } catch (e) {
-      if (e instanceof Error && (e.message.includes('ENOENT') || e.message.includes('EACCES')))
-        return false
-      throw e
-    }
-  }
-  async accessible(mode = fs.constants.F_OK) {
-    try {
-      await fp.access(this.isAt, mode)
-      return true
-    } catch (e: unknown) {
-      if (e instanceof Error && (e.message.includes('ENOENT') || e.message.includes('EACCES')))
-        return false
-      throw e
-    }
-  }
-  async untilAccessible(mode = fs.constants.F_OK, abs: AbortSignal, onEachAttempt?: () => unknown) {
+  async untilAccessible(mode = FIELD.F_OK, abs: AbortSignal, onEachAttempt?: () => unknown) {
     const watcher = fs.watch(this.isAt)
     try {
-      if (await this.accessible(mode))
+      if (await this.verify(mode, true))
         return
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _ of on(watcher, 'change', { signal: abs }))
-        if (await this.accessible(mode))
+      for await (let _ of on(watcher, 'change', { signal: abs }))
+        if (await this.verify(mode, true))
           return
         else
           await onEachAttempt?.()
@@ -276,16 +268,12 @@ export abstract class Road {
   }
 
   metaSync(suffixID = "tsInstrumentalityMeta") {
-    if (!this.verifySync())
-      throw new RdErr(`Road not verified, can't get metadata for '${this.isAt}'`)
     if (os.platform() === "win32")
       return fs.readFileSync(`${this.isAt}:${suffixID}`)
     else
       throw new RdErr("Extended attributes are not supported on this platform")
   }
   async meta(suffixID = "tsInstrumentalityMeta"): Promise<Record<string, unknown>> {
-    if (!await this.verify())
-      throw new RdErr(`Road not verified, can't get metadata for '${this.isAt}'`)
     if (os.platform() === "win32")
       return JSON.parse(await fp.readFile(`${this.isAt}:${suffixID}`, 'utf-8'))
     else
@@ -293,21 +281,15 @@ export abstract class Road {
   }
   setMetaSync(meta: Record<string, unknown>, suffixID = "tsInstrumentalityMeta") {
     using _ = this.initChangeSync()
-    if (!this.verifySync())
-      throw new RdErr(`Road not verified, can't set metadata for '${this.isAt}'`)
-    const metaString = JSON.stringify(meta)
     if (os.platform() === "win32")
-      fs.writeFileSync(`${this.isAt}:${suffixID}`, metaString, 'utf-8')
+      fs.writeFileSync(`${this.isAt}:${suffixID}`, JSON.stringify(meta), 'utf-8')
     else
       throw new RdErr("Extended attributes are not supported on this platform")
   }
   async setMeta(meta: Record<string, unknown>, suffixID = "tsInstrumentalityMeta") {
     using _ = await this.initChange()
-    if (!await this.verify())
-      throw new RdErr(`Road not verified, can't set metadata for '${this.isAt}'`)
-    const metaString = JSON.stringify(meta)
     if (os.platform() === "win32")
-      await fp.writeFile(`${this.isAt}:${suffixID}`, metaString, 'utf-8')
+      await fp.writeFile(`${this.isAt}:${suffixID}`, JSON.stringify(meta), 'utf-8')
     else
       throw new RdErr("Extended attributes are not supported on this platform")
   }
@@ -320,8 +302,8 @@ export abstract class Road {
   abstract copy(into: Folder): Promise<this>
   abstract renameSync(to: string): void
   abstract rename(to: string): Promise<void>
-  abstract ressurectSync(): void
-  abstract ressurect(): Promise<void>
+  abstract resurrectSync(): void
+  abstract resurrect(): Promise<void>
 }
 
 
@@ -332,19 +314,19 @@ export class File extends Road {
 
   static createSync(at: string) {
     try {
-      fs.accessSync(at, fs.constants.F_OK)
+      fs.accessSync(at, FIELD.W_OK)
     } catch {
       fs.writeFileSync(at, "")
     }
-    return new File(at)
+    return new File(at, false)
   }
   static async create(at: string) {
     try {
-      await fp.access(at, fs.constants.F_OK)
+      await fp.access(at, FIELD.W_OK)
     } catch {
       await fp.writeFile(at, "")
     }
-    return new File(at)
+    return new File(at, false)
   }
 
   readSync(): Buffer
@@ -394,7 +376,7 @@ export class File extends Road {
       await fd.close()
     }
   }
-  async *itLines(options: BufferEncoding | Parameters<typeof fs.createReadStream>[1] = { encoding: 'utf-8' }) {
+  async *itLines(options: Parameters<typeof fs.createReadStream>[1] = { encoding: 'utf-8' }) {
     const readStream = fs.createReadStream(this.isAt, options)
     const rlInterface = rl.createInterface({ input: readStream, crlfDelay: Infinity })
     try {
@@ -406,22 +388,22 @@ export class File extends Road {
     }
   }
   computeHashSync(algorithm?: string, options?: cr.HashOptions): Buffer
-  computeHashSync(algorithm?: string, options?: cr.HashOptions, encoding?: cr.BinaryToTextEncoding): string
-  computeHashSync(algorithm = "sha256", options?: cr.HashOptions, encoding?: cr.BinaryToTextEncoding): Buffer | string {
+  computeHashSync(algorithm?: string, options?: cr.HashOptions, encoding?: BufferEncoding): string
+  computeHashSync(algorithm = "sha256", options?: cr.HashOptions, encoding?: BufferEncoding): Buffer | string {
     const hash = cr.createHash(algorithm, options)
     for (const chunk of this.itBuffSync())
       hash.update(chunk)
     return encoding ? hash.digest(encoding) : hash.digest()
   }
   async computeHash(algorithm?: string, options?: cr.HashOptions): Promise<Buffer>
-  async computeHash(algorithm?: string, options?: cr.HashOptions, encoding?: cr.BinaryToTextEncoding): Promise<string>
-  async computeHash(algorithm = "sha256", options?: cr.HashOptions, encoding?: cr.BinaryToTextEncoding): Promise<Buffer | string> {
+  async computeHash(algorithm?: string, options?: cr.HashOptions, encoding?: BufferEncoding): Promise<string>
+  async computeHash(algorithm = "sha256", options?: cr.HashOptions, encoding?: BufferEncoding): Promise<Buffer | string> {
     const hash = cr.createHash(algorithm, options)
     for await (const chunk of this.itBuff())
       hash.update(chunk)
     return encoding ? hash.digest(encoding) : hash.digest()
   }
-  async streamHash(algorithm = "sha256", options?: cr.HashOptions, encoding?: cr.BinaryToTextEncoding): Promise<Buffer | string> {
+  async streamHash(algorithm = "sha256", options?: cr.HashOptions, encoding?: BufferEncoding): Promise<Buffer | string> {
     const hash = cr.createHash(algorithm, options)
     await sp.pipeline(fs.createReadStream(this.isAt), hash)
     return encoding ? hash.digest(encoding) : hash.digest()
@@ -497,12 +479,12 @@ export class File extends Road {
   copySync(into: Folder): this {
     const newPath = into.join(this.name)
     fs.copyFileSync(this.isAt, newPath)
-    return new File(newPath) as this
+    return new File(newPath, false) as this
   }
   async copy(into: Folder): Promise<this> {
     const newPath = into.join(this.name)
     await fp.copyFile(this.isAt, newPath)
-    return new File(newPath) as this
+    return new File(newPath, false) as this
   }
   renameSync(to: string) {
     using _ = this.initChangeSync()
@@ -516,17 +498,17 @@ export class File extends Road {
     await fp.rename(this.isAt, newPath)
     this.pointsTo = newPath
   }
-  ressurectSync() {
+  resurrectSync() {
     using _ = this.initChangeSync()
     fs.writeFileSync(this.isAt, "")
   }
-  async ressurect() {
+  async resurrect() {
     using _ = await this.initChange()
     await fp.writeFile(this.isAt, "")
   }
 }
 
-export function entry() { return new File(process.argv[1]!) }
+export function entry() { return new File(process.argv[1]!, false) }
 
 
 
@@ -537,7 +519,7 @@ export class Folder extends Road {
     } catch {
       await fp.mkdir(at, { recursive: true })
     }
-    return new Folder(at)
+    return new Folder(at, false)
   }
   static createSync(at: string): Folder {
     try {
@@ -545,7 +527,7 @@ export class Folder extends Road {
     } catch {
       fs.mkdirSync(at, { recursive: true })
     }
-    return new Folder(at)
+    return new Folder(at, false)
   }
 
   join(...paths: string[]) {
@@ -553,8 +535,8 @@ export class Folder extends Road {
   }
 
   itSync(): Iterable<Road>
-  itSync<T extends Road>(expectedType: new (_: string) => T): Iterable<T>
-  *itSync<T extends Road>(expectedType?: new (_: string) => T): Iterable<Road> | Iterable<T> {
+  itSync<T extends Road>(expectedType: new () => T): Iterable<T>
+  *itSync<T extends Road>(expectedType?: new () => T): Iterable<Road> | Iterable<T> {
     for (const entry of fs.readdirSync(this.isAt)) {
       const road = factorySync(this.join(entry))
       if (!expectedType || road instanceof expectedType)
@@ -562,8 +544,8 @@ export class Folder extends Road {
     }
   }
   it(): AsyncIterable<Road>
-  it<T extends Road>(expectedType: new (_: string) => T): AsyncIterable<T>
-  async *it<T extends Road>(expectedType?: new (_: string) => T): AsyncIterable<Road> | AsyncIterable<T> {
+  it<T extends Road>(expectedType: new () => T): AsyncIterable<T>
+  async *it<T extends Road>(expectedType?: new () => T): AsyncIterable<Road> | AsyncIterable<T> {
     for (const entry of await fp.readdir(this.isAt)) {
       const road = await factory(this.join(entry))
       if (!expectedType || road instanceof expectedType)
@@ -571,16 +553,16 @@ export class Folder extends Road {
     }
   }
   listSync(): Road[]
-  listSync<T extends Road>(expectedType: new (_: string) => T): T[]
-  listSync<T extends Road>(expectedType?: new (_: string) => T): Road[] | T[] {
+  listSync<T extends Road>(expectedType: new () => T): T[]
+  listSync<T extends Road>(expectedType?: new () => T): Road[] | T[] {
     const entries = fs.readdirSync(this.isAt).map(entry => factorySync(this.join(entry)))
     if (!expectedType)
       return entries
     return entries.filter(entry => entry instanceof expectedType) as unknown as T[]
   }
   async list(): Promise<Road[]>
-  async list<T extends Road>(_expectedType: new (_: string) => T): Promise<T[]>
-  async list<T extends Road>(_expectedType?: new (_: string) => T): Promise<Road[] | T[]> {
+  async list<T extends Road>(_expectedType: new () => T): Promise<T[]>
+  async list<T extends Road>(_expectedType?: new () => T): Promise<Road[] | T[]> {
     const entries = (await fp.readdir(this.isAt)).map(async entry => factory(this.join(entry)))
     const resolvedEntries = await Promise.all(entries)
     if (!_expectedType)
@@ -589,10 +571,9 @@ export class Folder extends Road {
   }
 
   findSync(name: string): Road | null
-  findSync<T extends Road>(name: string, _expectedType: new (_: string) => T): T | null
-  findSync<T extends Road>(name: string, _expectedType?: new (_: string) => T): Road | T | null {
+  findSync<T extends Road>(name: string, _expectedType: new () => T): T | null
+  findSync<T extends Road>(name: string, _expectedType?: new () => T): Road | T | null {
     try {
-      fs.accessSync(this.join(name), fs.constants.F_OK)
       const found = factorySync(this.join(name))
       if (!_expectedType)
         return found
@@ -605,8 +586,8 @@ export class Folder extends Road {
   }
 
   async find(name: string): Promise<Road | null>
-  async find<T extends Road>(name: string, _expectedType: new (_: string) => T): Promise<T | null>
-  async find<T extends Road>(name: string, _expectedType?: new (_: string) => T): Promise<Road | T | null> {
+  async find<T extends Road>(name: string, _expectedType: new () => T): Promise<T | null>
+  async find<T extends Road>(name: string, _expectedType?: new () => T): Promise<Road | T | null> {
     try {
       await fp.access(this.join(name), fs.constants.F_OK)
       const found = await factory(this.join(name))
@@ -654,12 +635,12 @@ export class Folder extends Road {
   copySync(into: Folder): this {
     const newPath = into.join(this.name)
     fs.cpSync(this.isAt, newPath, { recursive: true })
-    return new Folder(newPath) as this
+    return new Folder(newPath, false) as this
   }
   async copy(into: Folder): Promise<this> {
     const newPath = into.join(this.name)
     await fp.cp(this.isAt, newPath, { recursive: true })
-    return new Folder(newPath) as this
+    return new Folder(newPath, false) as this
   }
   renameSync(to: string) {
     using _ = this.initChangeSync()
@@ -673,20 +654,20 @@ export class Folder extends Road {
     await fp.rename(this.isAt, newPath)
     this.pointsTo = newPath
   }
-  ressurectSync() {
+  resurrectSync() {
     using _ = this.initChangeSync()
     fs.mkdirSync(this.isAt, { recursive: true })
   }
-  async ressurect() {
+  async resurrect() {
     using _ = await this.initChange()
     await fp.mkdir(this.isAt, { recursive: true })
   }
 }
 
-export function sysRoot() { return new Folder(ph.parse(process.cwd()).root) }
-export function home() { return new Folder(os.homedir()) }
-export function tmp() { return new Folder(os.tmpdir()) }
-export function here() { return new Folder(process.cwd()) }
+export function sysRoot() { return new Folder(ph.parse(process.cwd()).root, false) }
+export function home() { return new Folder(os.homedir(), false) }
+export function tmp() { return new Folder(os.tmpdir(), false) }
+export function here() { return new Folder(process.cwd(), false) }
 export { Folder as Dir, Folder as Directory, Folder as Dict, Folder as Dictionary }
 
 
@@ -698,7 +679,7 @@ export class SymbolicLink extends Road {
     } catch {
       await fp.symlink(target.isAt, at)
     }
-    return new SymbolicLink(at)
+    return new SymbolicLink(at, false)
   }
   static createSync(_at: string, _target: Road) {
     try {
@@ -706,7 +687,7 @@ export class SymbolicLink extends Road {
     } catch {
       fs.symlinkSync(_target.isAt, _at)
     }
-    return new SymbolicLink(_at)
+    return new SymbolicLink(_at, false)
   }
 
   targetSync() {
@@ -748,13 +729,13 @@ export class SymbolicLink extends Road {
     const newPath = _into.join(this.name)
     const target = this.targetSync()
     fs.symlinkSync(target.isAt, newPath)
-    return new SymbolicLink(newPath) as this
+    return new SymbolicLink(newPath, false) as this
   }
   async copy(_into: Folder): Promise<this> {
     const newPath = _into.join(this.name)
     const target = await this.target()
     await fp.symlink(target.isAt, newPath)
-    return new SymbolicLink(newPath) as this
+    return new SymbolicLink(newPath, false) as this
   }
   renameSync(_to: string) {
     using _ = this.initChangeSync()
@@ -768,12 +749,12 @@ export class SymbolicLink extends Road {
     await fp.rename(this.isAt, newPath)
     this.pointsTo = newPath
   }
-  ressurectSync() {
+  resurrectSync() {
     using _ = this.initChangeSync()
     const target = this.targetSync()
     fs.symlinkSync(target.isAt, this.isAt)
   }
-  async ressurect() {
+  async resurrect() {
     using _ = await this.initChange()
     const target = await this.target()
     await fp.symlink(target.isAt, this.isAt)
@@ -785,8 +766,8 @@ export { SymbolicLink as Symlink }
 
 export abstract class UnusableRoad extends Road {
   override readonly mutable: boolean = false // Modification is most likely to cause system issues (e.g. deleting a device file)
-  constructor(_at: string) {
-    super(_at)
+  constructor(_at: string, typeCheck: boolean) {
+    super(_at, typeCheck)
     Object.freeze(this)
   }
   error(): never { throw new RdErr(`${this.constructor.name} at '${this.isAt}' is a system-level resource thus intentionally made immutable.`) }
@@ -800,8 +781,8 @@ export abstract class UnusableRoad extends Road {
   override async copy(): Promise<never> { return this.error() }
   override renameSync(): never { return this.error() }
   override async rename(): Promise<never> { return this.error() }
-  override ressurectSync(): never { return this.error() }
-  override async ressurect(): Promise<never> { return this.error() }
+  override resurrectSync(): never { return this.error() }
+  override async resurrect(): Promise<never> { return this.error() }
 }
 export class BlockDevice extends UnusableRoad { }
 export class CharacterDevice extends UnusableRoad { }
@@ -824,10 +805,9 @@ export function forceCleanupToDelete() {
   toDelete?.clear()
   toDelete = null
   finalizer = null
-  if (exitHandlerRegistered) {
+  if (exitHandlerRegistered)
     process.off('exit', forceCleanupToDelete)
-    exitHandlerRegistered = false
-  }
+  exitHandlerRegistered = false
 }
 export function registerToCleanup(self: Road) {
   if (!finalizer)
@@ -843,7 +823,7 @@ export function registerToCleanup(self: Road) {
 }
 
 
-export function Temp<T extends Road>(createable: { createSync: (at: string) => T }, autoCleanup: boolean = true): T & Disposable & AsyncDisposable {
+export function Temp<T extends Road>(createable: { createSync: (at: string) => T }, autoCleanup: boolean): T & Disposable & AsyncDisposable {
   const t = createable.createSync(tmp().join(`instrumentality@${cr.randomUUID()}`))
   if (autoCleanup)
     registerToCleanup(t)

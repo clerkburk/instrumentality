@@ -1,23 +1,23 @@
 /**
  * Retries a function multiple times with optional error handling and abort signal.
  *
- * @param _fn - The function to be retried.
- * @param _maxAttempts - The maximum number of attempts to execute the function.
+ * @param fn_ - The function to be retried.
+ * @param maxAttempts_ - The maximum number of attempts to execute the function.
  * @param _cbErr - An optional callback function to be executed after each failed attempt.
- * @param _abs - An optional AbortSignal to abort the retry process.
+ * @param abs_ - An optional AbortSignal to abort the retry process.
  * @returns The result of the function if it succeeds within the allowed attempts.
  * @throws If the maximum number of attempts is exceeded or if the operation is aborted.
  */
-export async function retry<T>(_fn: () => T, _maxAttempts: number, _cbErr?: () => unknown, _abs?: AbortSignal): Promise<T> {
-  while (--_maxAttempts >= 0 && !(_abs?.aborted ?? false))
+export async function retry<T>(fn_: () => T, maxAttempts_: number, _cbErr?: () => unknown, abs_?: AbortSignal): Promise<T> {
+  while (--maxAttempts_ >= 0 && !(abs_?.aborted ?? false))
     try {
-      return await _fn()
+      return await fn_()
     } catch (err: unknown) {
-      if (_maxAttempts === 0)
+      if (maxAttempts_ === 0)
         throw err
       await _cbErr?.()
     }
-  if (_maxAttempts < 0)
+  if (maxAttempts_ < 0)
     throw new InsErr("Max attempts exceeded")
   else
     throw new InsErr("Operation aborted")
@@ -28,25 +28,25 @@ export async function retry<T>(_fn: () => T, _maxAttempts: number, _cbErr?: () =
 /**
  * Asynchronously sleeps for a specified duration, with optional abort signal support.
  *
- * @param _ms - The number of milliseconds to sleep.
- * @param _abs - An optional AbortSignal to abort the sleep.
+ * @param ms_ - The number of milliseconds to sleep.
+ * @param abs_ - An optional AbortSignal to abort the sleep.
  * @returns A Promise that resolves after the specified duration or rejects if aborted.
  */
-export async function sleep(_ms: number, _abs?: AbortSignal): Promise<void> {
-  if (_abs?.aborted)
+export async function sleep(ms_: number, abs_?: AbortSignal): Promise<void> {
+  if (abs_?.aborted)
     return Promise.reject(new InsErr("Sleep aborted before start"))
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      _abs?.removeEventListener("abort", onAbort)
+      abs_?.removeEventListener("abort", onAbort)
       resolve()
-    }, _ms)
+    }, ms_)
 
     function onAbort() {
       clearTimeout(timeout)
-      _abs?.removeEventListener("abort", onAbort)
+      abs_?.removeEventListener("abort", onAbort)
       reject(new InsErr("Sleep aborted during wait"))
     }
-    _abs?.addEventListener("abort", onAbort, { once: true })
+    abs_?.addEventListener("abort", onAbort, { once: true })
   })
 }
 
@@ -190,20 +190,20 @@ export const DEFAULT_ASCII = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 /**
  * Generate a random combination of characters from a given character set.
  *
- * @param _length - The length of the random string to generate.
- * @param _charset - A string containing the set of characters to choose from. Defaults to {@link DEFAULT_ASCII}.
+ * @param length_ - The length of the random string to generate.
+ * @param charset_ - A string containing the set of characters to choose from. Defaults to {@link DEFAULT_ASCII}.
  * @returns A random string of the specified length composed of characters from the provided character set.
- * @throws If `_length` is not a non-negative finite number.
+ * @throws If {@link length_} is not a non-negative finite number.
 */
-export function randStr(_length: number, _charset: string  = DEFAULT_ASCII): string {
-  if (!Number.isFinite(_length) || _length < 0)
+export function randStr(length_: number, charset_: string  = DEFAULT_ASCII): string {
+  if (!Number.isFinite(length_) || length_ < 0)
     throw new InsErr("Length must be a valid non-negative finite number")
-  const charsetLength = _charset.length
+  const charsetLength = charset_.length
   if (charsetLength === 0)
     return ""
   let result = ""
-  for (let i = 0; i < _length; i++)
-    result += _charset[Math.floor(Math.random() * charsetLength)]
+  for (let i = 0; i < length_; i++)
+    result += charset_[Math.floor(Math.random() * charsetLength)]
   return result
 }
 
@@ -212,4 +212,4 @@ export function randStr(_length: number, _charset: string  = DEFAULT_ASCII): str
 /**
  * Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification.
  */
-export class InsErr extends Error { override name = "TS-Instrumentality-Error" }
+export class InsErr extends Error { override name = "Instrumentality-Error" }
