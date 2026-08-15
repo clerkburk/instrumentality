@@ -1,5 +1,5 @@
 import * as rl from "node:readline"
-import * as fs from "node:fs"
+import * as fs from "node:fs"; import { constants as fsc } from "node:fs"
 import * as fp from "node:fs/promises"
 import * as ph from "node:path"
 import * as os from "node:os"
@@ -7,13 +7,6 @@ import * as cr from "node:crypto"
 import * as sp from "node:stream/promises"
 import { on } from "node:events"
 import * as bs from "./base.ts"
-
-
-
-/**
- * Helper alias for {@link fs.constants} to provide a more convenient way to access file system constants.
- */
-export const FIELD = fs.constants
 
 
 
@@ -32,14 +25,14 @@ export class RdErr extends bs.InsErr { override name = "Instrumentality-Road-Err
  * @throws If the file mode is unknown, throws a {@link RdErr}.
  */
 export function modeCtor(statmode: number) {
-  switch (statmode & FIELD.S_IFMT) {
-    case FIELD.S_IFREG: return File
-    case FIELD.S_IFDIR: return Folder
-    case FIELD.S_IFBLK: return BlockDevice
-    case FIELD.S_IFCHR: return CharacterDevice
-    case FIELD.S_IFLNK: return SymbolicLink
-    case FIELD.S_IFIFO: return Fifo
-    case FIELD.S_IFSOCK: return Socket
+  switch (statmode & fsc.S_IFMT) {
+    case fsc.S_IFREG: return File
+    case fsc.S_IFDIR: return Folder
+    case fsc.S_IFBLK: return BlockDevice
+    case fsc.S_IFCHR: return CharacterDevice
+    case fsc.S_IFLNK: return SymbolicLink
+    case fsc.S_IFIFO: return Fifo
+    case fsc.S_IFSOCK: return Socket
     default: throw new RdErr(`Unknown mode type ${statmode} (statmode is most likely corrupted)`)
   }
 }
@@ -54,12 +47,12 @@ export function modeCtor(statmode: number) {
  * @throws If the path does not exist, throws a fs {@link Error}.
  */
 export function factorySync(lookFor: string) {
-  fs.accessSync(lookFor, FIELD.F_OK)
+  fs.accessSync(lookFor, fsc.F_OK)
   return new (modeCtor(fs.lstatSync(lookFor).mode))(lookFor, false)
 }
 /** Async version of {@link factorySync}. */
 export async function factory(lookFor: string) {
-  await fp.access(lookFor, FIELD.F_OK)
+  await fp.access(lookFor, fsc.F_OK)
   return new (modeCtor((await fp.lstat(lookFor)).mode))(lookFor, false)
 }
 
@@ -69,9 +62,9 @@ export async function factory(lookFor: string) {
  * A map that keeps track of locked roads to prevent concurrent modifications. The keys are the absolute paths of the roads, and the values are promises that resolve when the lock is released.
  * 
  * @remarks Don't manually modify this map. Use the {@link Road.initChange} and {@link Road.initChangeSync} methods to acquire and release locks on roads.
- * The reason why this is even exposed is to enable advanced use cases. For read-only purposes, you should use the {@link lockFor} function to await the optional lock on a road.
+ * For read-only purposes, you should use the {@link lockFor} function to await the optional lock on a road.
  */
-export let lockedRoads: Map<string, Promise<void>> | null = null
+let lockedRoads: Map<string, Promise<void>> | null = null
 /**
  * Getter for the locked roads map.
  * 
@@ -92,7 +85,7 @@ export abstract class Road {
    * Changing this value does not affect the actual file system permissions, but rather serves as a safeguard within the application to prevent accidental modifications. */
   mutable: boolean = true
 
-  // Quick conversion
+  // Quick accessors
   /** Accessor for the absolute path to the file or directory that this Road instance represents. */
   get isAt() { return this.pointsTo }
   /** Accessor for the name of the file or directory that this Road instance represents. */
@@ -126,19 +119,19 @@ export abstract class Road {
    * @param expectMode The expected access mode for this Road other than visibility by this process.
    * @returns Result of the verification.
    */
-  verifySync(expectMode: number, typeCheck: boolean): boolean {
+  async verify(expectMode: number, typeCheck: boolean): Promise<boolean> {
     try {
-      fs.accessSync(this.isAt, FIELD.F_OK | expectMode)
-      return typeCheck || this instanceof this.typeSync()
+      await fp.access(this.isAt, fsc.F_OK | expectMode)
+      return typeCheck || this instanceof (await this.type())
     } catch {
       return false
     }
   }
-  /** Async version of {@link verifySync}. */
-  async verify(expectMode: number, typeCheck: boolean): Promise<boolean> {
+    /** Sync version of {@link verify}. */
+  verifySync(expectMode: number, typeCheck: boolean): boolean {
     try {
-      await fp.access(this.isAt, FIELD.F_OK | expectMode)
-      return typeCheck || this instanceof (await this.type())
+      fs.accessSync(this.isAt, fsc.F_OK | expectMode)
+      return typeCheck || this instanceof this.typeSync()
     } catch {
       return false
     }
@@ -148,41 +141,10 @@ export abstract class Road {
    * Creates a disposable lock for the file or directory represented by this Road instance, preventing concurrent modifications.
    * 
    * @returns An object with a `dispose` method that releases the lock when called. The lock is automatically released when the object is garbage collected.
-   * @throws If the file or directory is not accessible, is not writable, or (synchronous-only) is already locked by another operation.
-   * @remarks Please use this method with the `using` statement to ensure that the lock is properly released after the operation is complete. This method is intended for internal use and shouldn't be called directly in most cases. (that's why it's protected)
-   */
-  protected initChangeSync() {
-    if (!this.verifySync(FIELD.R_OK | FIELD.W_OK, true))
-      throw new RdErr(`Road to '${this.isAt}' (${this.constructor.name}) isn't the same as during construction, can't modify (OS type: ${fs.existsSync(this.isAt) ? this.typeSync().name : 'nonexistent'})`)
-    if (!this.mutable)
-      throw new RdErr(`Attempting to modify road to '${this.isAt}' of type ${this.constructor.name} which's marked as immutable (unrelated to the actual OS file permissions)`)
-    if (!lockedRoads)
-      lockedRoads = new Map<string, Promise<void>>()
-    const lockedPath = this.isAt
-    if (lockedRoads.has(lockedPath))
-      throw new RdErr(`Road to '${this.isAt}' is currently locked by another operation, can't modify synchronously`)
-    let releaseLock = () => {}
-    lockedRoads.set(lockedPath, new Promise<void>(res => releaseLock = res))
-    return {
-      [Symbol.dispose]() {
-        lockedRoads!.delete(lockedPath)
-        releaseLock()
-        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
-      },
-      async [Symbol.asyncDispose]() {
-        lockedRoads!.delete(lockedPath)
-        releaseLock()
-        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
-      }
-    }
-  }
-  /**
-   * Async version of {@link initChangeSync}.
-   * 
-   * @remarks This async version won't throw if the road is already locked, but will instead wait for the lock to be released before acquiring it.
+   * @remarks Please use this method with the `await using` statement to ensure that the lock is properly released after the operation is complete. This method is intended for internal use and shouldn't be called directly in most cases. (that's why it's protected)
    */
   protected async initChange() {
-    if (!await this.verify(FIELD.R_OK | FIELD.W_OK, true))
+    if (!await this.verify(fsc.R_OK | fsc.W_OK, true))
       throw new RdErr(`Road to '${this.isAt}' (${this.constructor.name}) isn't the same as during construction, can't modify (OS type: ${fs.existsSync(this.isAt) ? this.typeSync().name : 'nonexistent'})`)
     if (!this.mutable)
       throw new RdErr(`Attempting to modify road to '${this.isAt}' of type ${this.constructor.name} which's marked as immutable (unrelated to the actual OS file permissions)`)
@@ -206,10 +168,41 @@ export abstract class Road {
     }
   }
   /**
+   * Sync version of {@link initChangeSync}.
+   * 
+   * @remarks This sync version will throw if the road is already locked by another operation.
+   */
+  protected initChangeSync() {
+    if (!this.verifySync(fsc.R_OK | fsc.W_OK, true))
+      throw new RdErr(`Road to '${this.isAt}' (${this.constructor.name}) isn't the same as during construction, can't modify (OS type: ${fs.existsSync(this.isAt) ? this.typeSync().name : 'nonexistent'})`)
+    if (!this.mutable)
+      throw new RdErr(`Attempting to modify road to '${this.isAt}' of type ${this.constructor.name} which's marked as immutable (unrelated to the actual OS file permissions)`)
+    if (!lockedRoads)
+      lockedRoads = new Map<string, Promise<void>>()
+    const lockedPath = this.isAt
+    if (lockedRoads.has(lockedPath))
+      throw new RdErr(`Road to '${this.isAt}' is currently locked by another operation, can't modify synchronously`)
+    let releaseLock = () => {}
+    lockedRoads.set(lockedPath, new Promise<void>(res => releaseLock = res))
+    return {
+      [Symbol.dispose]() {
+        lockedRoads!.delete(lockedPath)
+        releaseLock()
+        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
+      },
+      async [Symbol.asyncDispose]() {
+        lockedRoads!.delete(lockedPath)
+        releaseLock()
+        releaseLock = () => { throw new RdErr("Lock already released, can't dispose") }
+      }
+    }
+  }
+
+  /**
    * Checks if the file or directory represented by this Road is both visible and of the same type as expected.
    */
-  existsSync() { return this.verifySync(FIELD.F_OK, true) }
-  async exists() { return this.verify(FIELD.F_OK, true) }
+  existsSync() { return this.verifySync(fsc.F_OK, true) }
+  async exists() { return this.verify(fsc.F_OK, true) }
   /**
    * @returns The file system stats for the file or directory.
    * @see {@link fs.lstatSync}
@@ -241,7 +234,7 @@ export abstract class Road {
   }
   ancestors() { return [...this.ancestorsIt()] }
 
-  async untilAccessible(mode = FIELD.F_OK, abs: AbortSignal, onEachAttempt?: () => unknown) {
+  async untilAccessible(mode = fsc.F_OK, abs: AbortSignal, onEachAttempt?: () => unknown) {
     const watcher = fs.watch(this.isAt)
     try {
       if (await this.verify(mode, true))
@@ -314,7 +307,7 @@ export class File extends Road {
 
   static createSync(at: string) {
     try {
-      fs.accessSync(at, FIELD.W_OK)
+      fs.accessSync(at, fsc.W_OK)
     } catch {
       fs.writeFileSync(at, "")
     }
@@ -322,7 +315,7 @@ export class File extends Road {
   }
   static async create(at: string) {
     try {
-      await fp.access(at, FIELD.W_OK)
+      await fp.access(at, fsc.W_OK)
     } catch {
       await fp.writeFile(at, "")
     }

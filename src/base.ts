@@ -1,4 +1,12 @@
 /**
+ * Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification.
+ */
+export class InsErr extends Error { override name = "Instrumentality-Error" }
+
+
+
+
+/**
  * Retries a function multiple times with optional error handling and abort signal.
  *
  * @param fn_ - The function to be retried.
@@ -177,46 +185,6 @@ export type Uint8ArrayView = Pick<Uint8Array,
 
 
 
-/**
- * The default character set used for generating random strings, consisting all safe characters for URLs and file names, excluding special characters.
- */
-export const SAFE_ASCII = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" as const 
-/**
- * Extension of {@link SAFE_ASCII} that includes additional special characters that can be printed but not safely used in URLs or file names, such as whitespace and certain punctuation marks.
- */
-export const DEFAULT_ASCII = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!@#$%^&*()[]{}|;:,.<>?/~`+=\\\"' " as const
-
-
-/**
- * Generate a random combination of characters from a given character set.
- *
- * @param length_ - The length of the random string to generate.
- * @param charset_ - A string containing the set of characters to choose from. Defaults to {@link DEFAULT_ASCII}.
- * @returns A random string of the specified length composed of characters from the provided character set.
- * @throws If {@link length_} is not a non-negative finite number.
-*/
-export function randStr(length_: number, charset_: string  = DEFAULT_ASCII): string {
-  if (!Number.isFinite(length_) || length_ < 0)
-    throw new InsErr("Length must be a valid non-negative finite number")
-  const charsetLength = charset_.length
-  if (charsetLength === 0)
-    return ""
-  let result = ""
-  for (let i = 0; i < length_; i++)
-    result += charset_[Math.floor(Math.random() * charsetLength)]
-  return result
-}
-
-
-
-/**
- * Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification.
- */
-export class InsErr extends Error { override name = "Instrumentality-Error" }
-
-
-
-
 /** Specific reserved 7-bit values codes that must be escaped when encoding data into base-122, as they are considered illegal in the encoding scheme. */
 export const BASE122_ILLEGAL = [0, 10, 13, 34, 38, 92] as const
 /** Mapping of illegal ascii codes to their corresponding indices in {@link BASE122_ILLEGAL} (reverse lookup). */
@@ -233,20 +201,24 @@ export const BASE122_SHORT = 0b111 as const
 
 
 /**
- * Encodes indexed data into a base-122 representation, going as low as 9% overhead for large data set, making base-64 look pathetic in comparison with its 33% overhead.
- * Though, this comes with a major trade-off (at which lower base): the output string isn't safe to use in URLs or file names.
- * The encoding process packs 7 bits of data into each character, and uses a two-byte sequence for illegal characters to ensure that the output string remains valid.
+ * Encodes indexed data into a base-122 representation, going as low as 9% overhead for large datasets, making base-64 look pathetic in comparison with its 33% overhead.
+ * The encoding process packs 7 bits of data into each character, and uses a two-byte sequence for reserved characters to ensure that the output string remains valid.
  *
  * @remarks The high density of base-122 comes with the trade-off of not being able to use the output string in certain contexts, such as URLs or file names.
  * @param data_ - An array-like object containing the data to be encoded.
- * @param label_ - The character encoding label to use for the output string. Defaults to "utf-8".
- * @param textDecodeOptions_ - Options for the TextDecoder, such as whether to throw on decoding errors. Defaults to `{ fatal: true }`.
  * @returns A string representing the base-122 encoded data.
+ * @throws If somehow malformed UTF-8 data is generated, the TextDecoder will throw an error (shouldn't happen if the input is valid).
+ * @see {@link decode122} for decoding the base-122 string back into its original byte representation.
+ * @see {@link BASE122_ILLEGAL} for the list of reserved characters that are escaped during encoding.
  * @example
  * // (pseudo-code)
- * <script type="text/plain">!!pƋƸ²VӦnKZ6w)jpA</script>
+ * // build script
+ * appendFile(".html", `<script type="text/plain">${encode122(compress(readFile(".jpg")))}</script>`)
+ * 
+ * // HTML
+ * <script type="text/plain">!!pƋƸ²VӦnKZ6w)jpA</script> // embedd data into HTML without it being interpreted as HTML or JS
  */
-export function encode122(data_: ArrayLike<number>, label_="utf-8", textDecodeOptions_:TextDecoderOptions={fatal:true}): string {
+export function encode122(data_: ArrayLike<number>): string {
   const out: number[] = []
   let byteIndex = 0
   let bitIndex = 0
@@ -280,8 +252,9 @@ export function encode122(data_: ArrayLike<number>, label_="utf-8", textDecodeOp
       )
     }
   }
-  return new TextDecoder(label_, textDecodeOptions_).decode(Uint8Array.from(out))
+  return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(out))
 }
+
 
 
 /**
@@ -291,8 +264,9 @@ export function encode122(data_: ArrayLike<number>, label_="utf-8", textDecodeOp
  * @param base122_ - The base-122 encoded string to decode.
  * @returns A Uint8Array containing the original byte data.
  * @throws If an invalid base-122 illegal index is encountered during decoding (shouldn't happen if the input was generated by {@link encode122}).
+ * @see {@link encode122} for encoding data into base-122.
  */
-export function decode122(base122_:string): Uint8Array {
+export function decode122(base122_: string): Uint8Array {
   const out: number[] = []
   let current = 0
   let bitIndex = 0

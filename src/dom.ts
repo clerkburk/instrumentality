@@ -69,10 +69,6 @@ export function byTag<K extends keyof HTMLElementTagNameMap>(tagName_: K): HTMLE
  * Regular expression to match cookie name-value pairs in a cookie string.
  */
 export const COOKIE_PAIR_REGEX = /(?:^|; )([^=;]+)=([^;]*)/g
-/**
- * Default path for cookies, used when no specific path is provided.
- */
-export const DEFAULT_PATH = '/' as const
 
 
 
@@ -89,7 +85,7 @@ export function setCookie(name_: string, data_: {
   domain?: string
   secure?: boolean
   sameSite?: 'Strict' | 'Lax' | 'None'
-}, path_: string = DEFAULT_PATH): void {
+}, path_ = '/'): void {
   let cookieString = `${encodeURIComponent(name_)}=${encodeURIComponent(JSON.stringify(data_.value))}; Path=${path_}`
   if (data_.expires)
     if (data_.expires instanceof Date) cookieString += `; Expires=${data_.expires.toUTCString()}`
@@ -106,7 +102,7 @@ export function setCookie(name_: string, data_: {
  * @param name_ - The name of the cookie to expire.
  * @param path_ - An optional path for the cookie; defaults to {@link DEFAULT_PATH}.
  */
-export function expireCookie(name_: string, path_: string = DEFAULT_PATH): void {
+export function expireCookie(name_: string, path_ = '/'): void {
   setCookie(name_, { value: "", expires: new Date(0) }, path_)
 }
 

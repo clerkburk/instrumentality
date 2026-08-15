@@ -1,9 +1,9 @@
-{  // Visit https://aka.ms/tsconfig to read more about this file
+{
   "compilerOptions": {
     // File Layout
     "rootDir": "./src",
     "outDir": "./dist",
-    "sourceMap": true,
+    "sourceMap": false,
     "declaration": true,
     "declarationMap": true,
     "noEmitOnError": true,
@@ -32,6 +32,6 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"],
+  "include": ["src", "assembly/index.ts"],
   "exclude": ["test"]
 }
