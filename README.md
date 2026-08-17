@@ -2,7 +2,7 @@
 ![black title](./assets/title-black.gif#gh-light-mode-only)
 
 
-## The INSTRUMENTALITY project
+## The INSTRUMENTALITY project (concept)
 A utility library for TypeScript/Node.js
 
 
