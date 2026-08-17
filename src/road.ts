@@ -24,7 +24,7 @@ export class RdErr extends bs.InsErr { override name = "Instrumentality-Road-Err
  * @returns The constructor function corresponding to the file mode.
  * @throws If the file mode is unknown, throws a {@link RdErr}.
  */
-export function modeCtor(statmode: number) {
+export function resolveMode(statmode: number) {
   switch (statmode & fsc.S_IFMT) {
     case fsc.S_IFREG: return File
     case fsc.S_IFDIR: return Folder
@@ -48,12 +48,12 @@ export function modeCtor(statmode: number) {
  */
 export function factorySync(lookFor: string) {
   fs.accessSync(lookFor, fsc.F_OK)
-  return new (modeCtor(fs.lstatSync(lookFor).mode))(lookFor, false)
+  return new (resolveMode(fs.lstatSync(lookFor).mode))(lookFor, false)
 }
 /** Async version of {@link factorySync}. */
 export async function factory(lookFor: string) {
   await fp.access(lookFor, fsc.F_OK)
-  return new (modeCtor((await fp.lstat(lookFor)).mode))(lookFor, false)
+  return new (resolveMode((await fp.lstat(lookFor)).mode))(lookFor, false)
 }
 
 
@@ -79,7 +79,7 @@ export function lockFor(roadOrPath: Road | string) {
 
 export abstract class Road {
   /** The absolute path to the file or directory that this Road instance represents.
-   * Intentionally made protected to prevent external modification, as changing this value could lead to inconsistencies and unexpected behavior. */
+   * @remarks Intentionally made protected to prevent external modification, as changing this value could lead to inconsistencies and unexpected behavior. */
   protected pointsTo: string
   /** Indicates whether the file or directory represented by this Road instance can be modified.
    * Changing this value does not affect the actual file system permissions, but rather serves as a safeguard within the application to prevent accidental modifications. */
@@ -89,14 +89,14 @@ export abstract class Road {
   /** Accessor for the absolute path to the file or directory that this Road instance represents. */
   get isAt() { return this.pointsTo }
   /** Accessor for the name of the file or directory that this Road instance represents. */
-  get name() { return ph.basename(this.isAt) }
+  get name() { return this.isAt.slice(this.isAt.lastIndexOf(ph.sep) + 1) }
   /** Same as {@link isAt} but for compatibility with external libraries that try to convert the object to a string. */
   toString() { return this.isAt }
   /** Returns the OS file type of the file or directory.
    * Return value (OS type) and the type of this instance are not guaranteed to be the same, as the file system may have changed since this instance was created. */
-  typeSync() { return (modeCtor(fs.lstatSync(this.isAt).mode)) }
+  typeSync() { return (resolveMode(fs.lstatSync(this.isAt).mode)) }
   /** Async version of {@link typeSync}. */
-  async type() { return (modeCtor((await fp.lstat(this.isAt)).mode)) }
+  async type() { return (resolveMode((await fp.lstat(this.isAt)).mode)) }
 
   /**
    * Constructs a new Road instance representing the file or directory at the specified path.
@@ -107,7 +107,7 @@ export abstract class Road {
    * @throws If the specified path does not exist, throws a fs.{@link Error}.
    * @throws If the type of the file or directory at the specified path does not match the type of this instance, throws a {@link RdErr}. Useful for subclasses.
    */
-  constructor(lookFor: string, typeCheck: boolean) {
+  constructor(lookFor: string, typeCheck: boolean | 1 | 0) {
     this.pointsTo = ph.resolve(lookFor)
     if (typeCheck && !(this instanceof this.typeSync())) // `this` directly refers to the subclass
       throw new RdErr(`Type missmatch: Path '${this.isAt}' is not of constructed type ${this.constructor.name}.`)
@@ -201,20 +201,18 @@ export abstract class Road {
   /**
    * Checks if the file or directory represented by this Road is both visible and of the same type as expected.
    */
-  existsSync() { return this.verifySync(fsc.F_OK, true) }
   async exists() { return this.verify(fsc.F_OK, true) }
+  existsSync() { return this.verifySync(fsc.F_OK, true) }
+  /**
+   * @returns The file system stats for the file or directory.
+   * @see {@link fs.lstat}
+   */
+  async stats() { return fp.lstat(this.isAt) }
   /**
    * @returns The file system stats for the file or directory.
    * @see {@link fs.lstatSync}
    */
   statsSync() { return fs.lstatSync(this.isAt) }
-  /**
-   * @returns The file system stats for the file or directory.
-   * @see {@link fs.promises.lstat}
-   */
-  async stats() {
-    return fp.lstat(this.isAt)
-  }
 
   /**
    * @returns The amount of path segments in the absolute path to the file or directory represented by this Road instance, minus one (i.e., the depth of the file or directory in the file system hierarchy).

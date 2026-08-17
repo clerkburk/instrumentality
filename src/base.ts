@@ -257,7 +257,6 @@ export function encode122(data_: ArrayLike<number>): string {
 }
 
 
-
 /**
  * Decodes a base-122 encoded string back into its original byte representation.
  * The decoding process reverses the encoding, extracting 7 bits of data from each character and handling two-byte sequences for illegal characters.
