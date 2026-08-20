@@ -118,6 +118,8 @@ export class Benchmark {
   round() { this.rounds.push(this.ms); this.timer = performance.now() }
   /** Resets the benchmark timer to the current time and clears recorded rounds. */
   reset() { this.rounds = []; this.timer = performance.now() }
+  /** Total time passed since the benchmark was created or last reset, in milliseconds. */
+  get total() { return this.rounds.reduce((a, b) => a + b, 0) + this.ms }
   /** Elapsed time in years, assuming 12 28-day months per year. */
   get y() { return this.mn / 12 }
   /** Elapsed time in months, assuming each month has 28 days. */

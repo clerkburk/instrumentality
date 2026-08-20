@@ -5,7 +5,7 @@
     "url": "https://github.com/clerkburk/instrumentality.git"
   },
   "type": "module",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "main": "./dist/base.js",
   "types": "./dist/base.d.ts",
   "devDependencies": {
@@ -24,10 +24,7 @@
     "./dom": {
       "import": "./dist/dom.js",
       "types": "./dist/dom.d.ts"
-    },
-    "./src/base": "./src/base.ts",
-    "./src/road": "./src/road.ts",
-    "./src/dom": "./src/dom.ts"
+    }
   },
   "files": [
     "dist",

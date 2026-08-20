@@ -404,17 +404,17 @@ export class File extends Road {
 
 
 // Bizarre functions for file I/O
-export async function computeHash(f_: File, algorithm_?: string, options_?: cr.HashOptions): Promise<Buffer>
-export async function computeHash(f_: File, algorithm_?: string, options_?: cr.HashOptions, encoding_?: BufferEncoding): Promise<string>
-export async function computeHash(f_: File, algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: BufferEncoding): Promise<Buffer | string> {
+export async function hash(f_: File, algorithm_?: string, options_?: cr.HashOptions): Promise<Buffer>
+export async function hash(f_: File, algorithm_?: string, options_?: cr.HashOptions, encoding_?: BufferEncoding): Promise<string>
+export async function hash(f_: File, algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: BufferEncoding): Promise<Buffer | string> {
   const hash = cr.createHash(algorithm_, options_)
   for await (const chunk of f_.itBuff())
     hash.update(chunk)
   return encoding_ ? hash.digest(encoding_) : hash.digest()
 }
-export function computeHashSync(f_: File, algorithm_?: string, options_?: cr.HashOptions): Buffer
-export function computeHashSync(f_: File, algorithm_?: string, options_?: cr.HashOptions, encoding_?: BufferEncoding): string
-export function computeHashSync(f_: File, algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: BufferEncoding): Buffer | string {
+export function hashSync(f_: File, algorithm_?: string, options_?: cr.HashOptions): Buffer
+export function hashSync(f_: File, algorithm_?: string, options_?: cr.HashOptions, encoding_?: BufferEncoding): string
+export function hashSync(f_: File, algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: BufferEncoding): Buffer | string {
   const hash = cr.createHash(algorithm_, options_)
   for (const chunk of f_.itBuffSync())
     hash.update(chunk)
