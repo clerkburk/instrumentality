@@ -280,11 +280,13 @@ export class File extends Road {
     catch { await fp.writeFile(at_, "") }
     return new File(at_, true)
   }
+  static readonly mk: typeof File.create = File.create
   static createSync(at_: string) {
     try { fs.accessSync(at_, fs.constants.W_OK) }
     catch { fs.writeFileSync(at_, "") }
     return new File(at_, true)
   }
+  static readonly mkSync: typeof File.createSync = File.createSync
 
   get ext() { return ph.extname(this.isAt) }
   get noExt() { return ph.basename(this.isAt, this.ext) }
@@ -488,11 +490,13 @@ export class Folder extends Road {
     catch { await fp.mkdir(at_, { recursive: true }) }
     return new Folder(at_, false)
   }
+  static readonly mk: typeof Folder.create = Folder.create
   static createSync(at_: string) {
     try { fs.accessSync(at_, fsc.W_OK) }
     catch { fs.mkdirSync(at_, { recursive: true }) }
     return new Folder(at_, false)
   }
+  static readonly mkSync: typeof Folder.createSync = Folder.createSync
 
   join(...paths_: string[]) {
     return ph.join(this.isAt, ...paths_)
@@ -643,11 +647,13 @@ export class SymbolicLink extends Road {
     catch { await fp.symlink(target_.toString(), at_) }
     return new SymbolicLink(at_, false)
   }
+  static readonly mk: typeof SymbolicLink.create = SymbolicLink.create
   static createSync(at_: string, target_: string | Road) {
     try { fs.accessSync(at_, fs.constants.F_OK) }
     catch { fs.symlinkSync(target_.toString(), at_) }
     return new SymbolicLink(at_, false)
   }
+  static readonly mkSync: typeof SymbolicLink.createSync = SymbolicLink.createSync
 
   async target() {
     return factory(ph.resolve(ph.dirname(this.isAt), await fp.readlink(this.isAt)))
