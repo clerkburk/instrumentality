@@ -32,6 +32,6 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src", "assembly/index.ts"],
+  "include": ["src"],
   "exclude": ["test"]
 }

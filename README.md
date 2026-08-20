@@ -1,5 +1,5 @@
-![white title](./assets/title-white.gif#gh-dark-mode-only)
-![black title](./assets/title-black.gif#gh-light-mode-only)
+<!-- ![black title](./assets/titleDark.webp#gh-light-mode-only) -->
+![white title](./assets/titleLight.webp#gh-dark-mode-only)
 
 
 ## The INSTRUMENTALITY project (concept)

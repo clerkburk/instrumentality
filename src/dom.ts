@@ -1,74 +1,59 @@
 import * as bs from "./base.ts"
-/**
- * Subclass of {@link bs.InsErr} that represents an error thrown from this specific module of the library
- */
+
+
+
+/** Subclass of {@link bs.InsErr} that represents an error thrown from this specific module of the library */
 export class DomErr extends bs.InsErr { override name = "Instrumentality-DOM-Error" }
 
 
 
 /**
- * Returns a Promise that resolves when the DOM is fully loaded and ready.
- *
- * @returns A Promise that resolves when the DOM is ready.
+ * Resolves on `DOMContentLoaded` or immediately if the document is already ready.
  */
 export async function onceReady(): Promise<void> {
   if (document.readyState === "complete" || document.readyState === "interactive")
-    return Promise.resolve()
+    return
   return new Promise(r => document.addEventListener("DOMContentLoaded", () => r(), { once: true }))
 }
 
 
 
 /**
- * Retrieves an HTML element by its ID and ensures it matches the specified type.
+ * Typed accessor for {@link document.getElementById}
  *
- * @param id_ - The ID of the HTML element to retrieve.
- * @param elementType_ - An optional constructor function for the expected element type.
- * @returns The HTML element with the specified ID and type.
- * @throws Will throw an error if the element is not found or does not match the expected type.
+ * @param id_ - The ID of the element to retrieve.
+ * @param type_ - Expected type, defaults to {@link HTMLElement}.
+ * @returns The corresponding element if found and of the expected type, otherwise `null`.
  */
-export function byId<T extends HTMLElement>(id_: string, elementType_?: new () => T): T {
+export function byId<T extends HTMLElement>(id_: string, type_: new () => T): T | null {
   const element = document.getElementById(id_)
-  const typeCtor = elementType_ ?? HTMLElement
-  if (!(element instanceof typeCtor))
-    throw new DomErr(`Type missmatch: Element with id '${id_}' is not of type ${typeCtor.name}`)
-  return element as T
+  if (element instanceof type_)
+    return element
+  return null
 }
 
 
 /**
- * Retrieves all HTML elements with the specified class name and ensures they match the specified type.
+ * Typed accessor for {@link document.getElementsByClassName}
  *
  * @param className_ - The class name of the elements to retrieve.
- * @param elementType_ - An optional constructor function for the expected element type.
- * @returns An array of {@link HTMLElement} with the specified class name and type.
- * @throws Will throw an error if any element does not match the expected type.
+ * @param type_ - An optional constructor function for the expected element type.
+ * @returns All elements with the specified class name and type.
  */
-export function byClass<T extends HTMLElement>(className_: string, elementType_?: new () => T): T[] {
-  return Array.from(document.getElementsByClassName(className_)).map((element, index) => {
-    const typeCtor = elementType_ ?? HTMLElement
-    if (!(element instanceof typeCtor))
-      throw new DomErr(`Type missmatch: Element at index ${index} with class '${className_}' is not of type ${typeCtor.name}`)
-    return element as T
-  })
+export function byClass<T extends HTMLElement>(className_: string, type_: new () => T): T[] {
+  return [...document.getElementsByClassName(className_)].filter((el): el is T => el instanceof type_)
 }
 
 
 /**
- * Retrieves all HTML elements with the specified tag name.
+ * Typed accessor for {@link document.getElementsByTagName}
  *
- * @param tagName_ - The tag name of the HTML elements to retrieve.
+ * @param tag_ - The HTML tag name of the elements to retrieve.
+ * @returns An array of {@link HTMLElement}s with the specified tag name.
  */
-export function byTag<K extends keyof HTMLElementTagNameMap>(tagName_: K): HTMLElementTagNameMap[K][] {
-  return Array.from(document.getElementsByTagName(tagName_))
+export function byTag<K extends keyof HTMLElementTagNameMap>(tag_: K): HTMLElementTagNameMap[K][] {
+  return [...document.getElementsByTagName(tag_)]
 }
-
-
-
-/**
- * Regular expression to match cookie name-value pairs in a cookie string.
- */
-export const COOKIE_PAIR_REGEX = /(?:^|; )([^=;]+)=([^;]*)/g
 
 
 
@@ -76,7 +61,7 @@ export const COOKIE_PAIR_REGEX = /(?:^|; )([^=;]+)=([^;]*)/g
  * Sets a cookie with the specified name, data, and optional path.
  * 
  * @param name_ - The name of the cookie.
- * @param data_ - The data to be stored in the cookie, including its value and optional attributes.
+ * @param data_ - The data to be stored in the cookie.
  * @param path_ - An optional path for the cookie; defaults to {@link DEFAULT_PATH}.
  */
 export function setCookie(name_: string, data_: {
@@ -97,9 +82,9 @@ export function setCookie(name_: string, data_: {
 }
 
 /**
- * Expires a cookie by setting its value to an empty string and its expiration date to the Unix epoch.
+ * Expires a cookie immediately.
  *
- * @param name_ - The name of the cookie to expire.
+ * @param name_ - The name of the cookie.
  * @param path_ - An optional path for the cookie; defaults to {@link DEFAULT_PATH}.
  */
 export function expireCookie(name_: string, path_ = '/'): void {
@@ -107,13 +92,13 @@ export function expireCookie(name_: string, path_ = '/'): void {
 }
 
 /**
- * Lists all cookies as a record of name-value pairs.
+ * Lists all cookies as a record of key-value pairs.
  *
  * @returns A record where each key is a cookie name and each value is the corresponding cookie value.
  */
 export function cookies(): Record<string, unknown> {
   const cookies: Record<string, unknown> = {}
-  const matches = document.cookie.matchAll(COOKIE_PAIR_REGEX)
+  const matches = document.cookie.matchAll(/(?:^|; )([^=;]+)=([^;]*)/g)
   for (const match of matches)
     cookies[decodeURIComponent(match[1] ?? "")] = JSON.parse(decodeURIComponent(match[2] ?? ""))
   return cookies

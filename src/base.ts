@@ -1,6 +1,4 @@
-/**
- * Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification.
- */
+/** Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification. */
 export class InsErr extends Error { override name = "Instrumentality-Error" }
 
 
@@ -11,22 +9,23 @@ export class InsErr extends Error { override name = "Instrumentality-Error" }
  *
  * @param fn_ - The function to be retried.
  * @param maxAttempts_ - The maximum number of attempts to execute the function.
- * @param _cbErr - An optional callback function to be executed after each failed attempt.
+ * @param cbErr_ - An optional callback function to be executed after each failed attempt.
  * @param abs_ - An optional AbortSignal to abort the retry process.
- * @returns The result of the function if it succeeds within the allowed attempts.
- * @throws If the maximum number of attempts is exceeded or if the operation is aborted.
+ * @returns The result of {@link fn_} if it succeeds within the allowed attempts.
+ * @throws {unknown} If {@link fn_} fails after the maximum attempts, the last error thrown by {@link fn_} is re-thrown.
+ * @throws {InsErr} If the maximum attempts is less than 1 or if the operation is aborted.
  */
-export async function retry<T>(fn_: () => T, maxAttempts_: number, _cbErr?: () => unknown, abs_?: AbortSignal): Promise<T> {
+export async function retry<T>(fn_: () => T, maxAttempts_: number, cbErr_?: () => unknown, abs_?: AbortSignal): Promise<T> {
   while (--maxAttempts_ >= 0 && !(abs_?.aborted ?? false))
     try {
       return await fn_()
     } catch (err: unknown) {
-      if (maxAttempts_ === 0)
+      if (maxAttempts_ <= 0)
         throw err
-      await _cbErr?.()
+      await cbErr_?.()
     }
   if (maxAttempts_ < 0)
-    throw new InsErr("Max attempts exceeded")
+    throw new InsErr("Max attempts must be at least 1")
   else
     throw new InsErr("Operation aborted")
 }
@@ -34,11 +33,11 @@ export async function retry<T>(fn_: () => T, maxAttempts_: number, _cbErr?: () =
 
 
 /**
- * Asynchronously sleeps for a specified duration, with optional abort signal support.
+ * Asynchronously sleep.
  *
  * @param ms_ - The number of milliseconds to sleep.
  * @param abs_ - An optional AbortSignal to abort the sleep.
- * @returns A Promise that resolves after the specified duration or rejects if aborted.
+ * @throws {InsErr} If the sleep is aborted before or during the wait.
  */
 export async function sleep(ms_: number, abs_?: AbortSignal): Promise<void> {
   if (abs_?.aborted)
@@ -61,7 +60,7 @@ export async function sleep(ms_: number, abs_?: AbortSignal): Promise<void> {
 
 
 /**
- * Helper type to build a tuple of a specified length.
+ * Build a tuple of a specified length.
  *
  * @template N - The desired length of the tuple.
  * @template T - The tuple being built (used for recursion).
@@ -71,7 +70,7 @@ type BuildTuple<N extends number, T extends number[] = []> =
 
 
 /**
- * Helper type to add two number types together.
+ * Add two number types together.
  *
  * @template A - The first number type.
  * @template B - The second number type.
@@ -81,7 +80,7 @@ export type Add<A extends number, B extends number> =
 
 
 /**
- * Helper type to enumerate numbers from 0 to N-1.
+ * Enumerate numbers from 0 to N-1 as a union type.
  *
  * @template N - The upper limit (exclusive) for the enumeration.
  * @template A - The accumulator array used for recursion.
@@ -92,31 +91,28 @@ A['length'] extends N ? A[number] : Enumerate<N, [...A, A['length']]>
 
 
 /**
- * A benchmarking class that provides various time units for measuring elapsed time.
- *
- * The class starts a timer upon instantiation and provides properties to access the elapsed time in different units (milliseconds, seconds, minutes, etc.).
- * The `round` method can be called to record the current elapsed time and restart the timer.
+ * Wrapper around {@link performance.now}
  *
  * @property {@link rounds} - An array that stores the recorded elapsed times from each round.
  * @property {@link timer} - The initial timestamp when the benchmark was created or last reset.
  * @method {@link round} - Records the current elapsed time and restarts the timer.
  * @method {@link reset} - Resets the benchmark timer to the current time and clears recorded rounds.
- * @accessor {@link y} - Elapsed time in years.
- * @accessor {@link mn} - Elapsed time in months.
- * @accessor {@link w} - Elapsed time in weeks.
- * @accessor {@link d} - Elapsed time in days.
- * @accessor {@link h} - Elapsed time in hours.
- * @accessor {@link m} - Elapsed time in minutes.
- * @accessor {@link s} - Elapsed time in seconds.
- * @accessor {@link ms} - Elapsed time in milliseconds.
- * @accessor {@link μs} - Elapsed time in microseconds.
- * @accessor {@link ns} - Elapsed time in nanoseconds.
- * @accessor {@link ps} - Elapsed time in picoseconds.
+ * @accessor {@link y} (years)
+ * @accessor {@link mn} (months)
+ * @accessor {@link w} (weeks)
+ * @accessor {@link d} (days)
+ * @accessor {@link h} (hours)
+ * @accessor {@link m} (minutes)
+ * @accessor {@link s} (seconds)
+ * @accessor {@link ms} (milliseconds)
+ * @accessor {@link μs} (microseconds)
+ * @accessor {@link ns} (nanoseconds)
+ * @accessor {@link ps} (picoseconds)
  */
 export class Benchmark {
-  /** An array that stores the recorded elapsed times from each round. */
+  /** An array that stores the recorded elapsed times from each round (relative to the previous). */
   rounds: number[] = []
-  /** Initializes the benchmark timer to the current time using `performance.now()`. */
+  /** The initial timestamp when the benchmark was created or last reset. */
   timer = performance.now()
   /** Records the current elapsed time and restarts the timer. */
   round() { this.rounds.push(this.ms); this.timer = performance.now() }
@@ -149,9 +145,7 @@ export { Benchmark as Bench, Benchmark as Timer, Benchmark as Stopwatch }
 
 
 
-/**
- * Helper type that represents a view of a Uint8Array, exposing only view methods and properties, along with a readonly index signature for accessing elements.
- */
+/** Compiler sugar to hide mutating methods/properties for read-only operations (no runtime effect). */
 export type Uint8ArrayView = Pick<Uint8Array,
   | "at"
   | "includes"
@@ -202,22 +196,13 @@ export const BASE122_SHORT = 0b111 as const
 
 
 /**
- * Encodes indexed data into a base-122 representation, going as low as 14% overhead for regular data, making base-64 look pathetic in comparison with its 33% overhead.
- * The encoding process packs 7 bits of data into each character, and uses a two-byte sequence for reserved characters to ensure that the output string remains valid.
+ * Encodes indexed data into a base-122 representation.
  *
- * @remarks The high density of base-122 comes with the trade-off of not being able to use the output string in certain contexts, such as URLs or file names.
  * @param data_ - An array-like object containing the data to be encoded.
  * @returns A string representing the base-122 encoded data.
- * @throws If somehow malformed UTF-8 data is generated, the TextDecoder will throw an error (shouldn't happen if the input is valid).
- * @see {@link decode122} for decoding the base-122 string back into its original byte representation.
- * @see {@link BASE122_ILLEGAL} for the list of reserved characters that are escaped during encoding.
- * @example
- * // (pseudo-code)
- * // build script
- * appendFile(".html", `<script type="text/plain">${encode122(compress(readFile(".jpg")))}</script>`)
- * 
- * // HTML
- * <script type="text/plain">!!pƋƸ²VӦnKZ6w)jpA</script> // embedd data into HTML without it being interpreted as HTML or JS
+ * @throws If somehow malformed UTF-8 data is generated, the {@link TextDecoder} will throw an error (shouldn't happen if the input is valid).
+ * @remarks The high density might not be suitable for all use cases, especially if the medium used to transmit the data has limitations on character sets or encoding.
+ * @see {@link TextDecoder} how the output string is generated from the byte array (this step is necessary for accurate translation to a string).
  */
 export function encode122(data_: ArrayLike<number>): string {
   const out: number[] = []
@@ -259,12 +244,10 @@ export function encode122(data_: ArrayLike<number>): string {
 
 /**
  * Decodes a base-122 encoded string back into its original byte representation.
- * The decoding process reverses the encoding, extracting 7 bits of data from each character and handling two-byte sequences for illegal characters.
  * 
  * @param base122_ - The base-122 encoded string to decode.
  * @returns A Uint8Array containing the original byte data.
  * @throws If an invalid base-122 illegal index is encountered during decoding (shouldn't happen if the input was generated by {@link encode122}).
- * @see {@link encode122} for encoding data into base-122.
  */
 export function decode122(base122_: string) {
   const out: number[] = []
