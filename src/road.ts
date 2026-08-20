@@ -269,6 +269,7 @@ export abstract class Road {
   /** Type narrowing for {@link Socket} (similar to `instanceof` without unnecessary runtime checks). */
   isSocket(): this is Socket { return false as const }
 }
+export type road_t = ConstructorParameters<typeof Road>
 
 
 
@@ -498,8 +499,8 @@ export class Folder extends Road {
   }
 
   it(): AsyncIterable<Road>
-  it<T extends Road>(expectedType_: new () => T): AsyncIterable<T>
-  async *it<T extends Road>(expectedType_?: new () => T): AsyncIterable<Road> | AsyncIterable<T> {
+  it<T extends Road>(expectedType_: new (..._: any[]) => T): AsyncIterable<T>
+  async *it<T extends Road>(expectedType_?: new (..._: any[]) => T): AsyncIterable<Road> | AsyncIterable<T> {
     for (const entryName of await fp.readdir(this.isAt)) {
       const road = await factory(this.join(entryName))
       if (!expectedType_ || road instanceof expectedType_)
@@ -507,8 +508,8 @@ export class Folder extends Road {
     }
   }
   itSync(): Iterable<Road>
-  itSync<T extends Road>(expectedType_: new () => T): Iterable<T>
-  *itSync<T extends Road>(expectedType_?: new () => T): Iterable<Road> | Iterable<T> {
+  itSync<T extends Road>(expectedType_: new (..._: any[]) => T): Iterable<T>
+  *itSync<T extends Road>(expectedType_?: new (..._: any[]) => T): Iterable<Road> | Iterable<T> {
     for (const entry of fs.readdirSync(this.isAt)) {
       const road = factorySync(this.join(entry))
       if (!expectedType_ || road instanceof expectedType_)
@@ -516,8 +517,8 @@ export class Folder extends Road {
     }
   }
   async list(): Promise<Road[]>
-  async list<T extends Road>(expectedType_: new () => T): Promise<T[]>
-  async list<T extends Road>(expectedType_?: new () => T): Promise<Road[] | T[]> {
+  async list<T extends Road>(expectedType_: new (..._: any[]) => T): Promise<T[]>
+  async list<T extends Road>(expectedType_?: new (..._: any[]) => T): Promise<Road[] | T[]> {
     const entries = (await fp.readdir(this.isAt)).map(async entry => factory(this.join(entry)))
     const resolvedEntries = await Promise.all(entries)
     if (!expectedType_)
@@ -525,8 +526,8 @@ export class Folder extends Road {
     return resolvedEntries.filter(entry => entry instanceof expectedType_) as unknown as T[]
   }
   listSync(): Road[]
-  listSync<T extends Road>(expectedType_: new () => T): T[]
-  listSync<T extends Road>(expectedType_?: new () => T): Road[] | T[] {
+  listSync<T extends Road>(expectedType_: new (..._: any[]) => T): T[]
+  listSync<T extends Road>(expectedType_?: new (..._: any[]) => T): Road[] | T[] {
     const entries = fs.readdirSync(this.isAt).map(entry => factorySync(this.join(entry)))
     if (!expectedType_)
       return entries
@@ -534,8 +535,8 @@ export class Folder extends Road {
   }
 
   async find(name_: string): Promise<Road | null>
-  async find<T extends Road>(name_: string, expectedType_: new () => T): Promise<T | null>
-  async find<T extends Road>(name_: string, expectedType_?: new () => T): Promise<Road | T | null> {
+  async find<T extends Road>(name_: string, expectedType_: new (..._: any[]) => T): Promise<T | null>
+  async find<T extends Road>(name_: string, expectedType_?: new (..._: any[]) => T): Promise<Road | T | null> {
     try {
       await fp.access(this.join(name_), fs.constants.F_OK)
       const found = await factory(this.join(name_))
@@ -549,8 +550,8 @@ export class Folder extends Road {
     }
   }
   findSync(name_: string): Road | null
-  findSync<T extends Road>(name_: string, expectedType_: new () => T): T | null
-  findSync<T extends Road>(name_: string, expectedType_?: new () => T): Road | T | null {
+  findSync<T extends Road>(name_: string, expectedType_: new (..._: any[]) => T): T | null
+  findSync<T extends Road>(name_: string, expectedType_?: new (..._: any[]) => T): Road | T | null {
     try {
       const found = factorySync(this.join(name_))
       if (!expectedType_)
