@@ -13,7 +13,7 @@ A combination of files to handle TS/JS by itself, Node and DOM (for web) that pr
 #
 ### How to use
 ```sh
-npm install git+https://github.com/clerkburk/ts-instrumentality.git
+npm install instrumentality
 ```
 then
 ```ts

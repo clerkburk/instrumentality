@@ -1,12 +1,3 @@
-import * as bs from "./base.ts"
-
-
-
-/** Subclass of {@link bs.InsErr} that represents an error thrown from this specific module of the library */
-export class DomErr extends bs.InsErr { override name = "Instrumentality-DOM-Error" }
-
-
-
 /**
  * Resolves on `DOMContentLoaded` or immediately if the document is already ready.
  */
@@ -37,7 +28,7 @@ export function byId<T extends HTMLElement>(id_: string, type_: new () => T): T 
  * Typed accessor for {@link document.getElementsByClassName}
  *
  * @param className_ - The class name of the elements to retrieve.
- * @param type_ - An optional constructor function for the expected element type.
+ * @param type_ - The constructor function for the expected element type.
  * @returns All elements with the specified class name and type.
  */
 export function byClass<T extends HTMLElement>(className_: string, type_: new () => T): T[] {

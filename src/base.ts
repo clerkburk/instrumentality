@@ -1,61 +1,41 @@
 /** Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification. */
-export class InsErr extends Error { override name = "Instrumentality-Error" }
-
+export class Err extends Error { override name = "Instrumentality-Error" }
+export { Err as InsErr }
 
 
 
 /**
- * Retries a function multiple times with optional error handling and abort signal.
+ * Retries a function multiple times until it succeeds or the maximum number of attempts is reached, or the error callback indicates to stop.
  *
  * @param fn_ - The function to be retried.
  * @param maxAttempts_ - The maximum number of attempts to execute the function.
- * @param cbErr_ - An optional callback function to be executed after each failed attempt.
- * @param abs_ - An optional AbortSignal to abort the retry process.
+ * @param cbErr_ - An optional callback function that is invoked when an error occurs. It receives the error and the remaining number of attempts as arguments and should return `true` to continue retrying or `false` to stop.
  * @returns The result of {@link fn_} if it succeeds within the allowed attempts.
- * @throws {unknown} If {@link fn_} fails after the maximum attempts, the last error thrown by {@link fn_} is re-thrown.
- * @throws {InsErr} If the maximum attempts is less than 1 or if the operation is aborted.
+ * @throws the last error thrown by {@link fn_} if it fails after the maximum attempts or if the error callback indicates to stop.
+ * @throws If {@link cbErr_} throws or returns a rejected promise, the error is propagated immediately.
+ * @throws {InsErr} If {@link maxAttempts_} isn't a positive integer.
  */
-export async function retry<T>(fn_: () => T, maxAttempts_: number, cbErr_?: () => unknown, abs_?: AbortSignal): Promise<T> {
-  while (--maxAttempts_ >= 0 && !(abs_?.aborted ?? false))
+export async function retry<T>(fn_: () => T | PromiseLike<T>, maxAttempts_: number, cbErr_?: (err: unknown, remainingAttempts: number) => boolean | PromiseLike<boolean>): Promise<T> {
+  if (!Number.isInteger(maxAttempts_) || maxAttempts_ < 1)
+    throw new Err("Max attempts isn't a positive integer")
+  while (true)
     try {
       return await fn_()
     } catch (err: unknown) {
-      if (maxAttempts_ <= 0)
+      if (--maxAttempts_ <= 0 || (cbErr_ && !(await cbErr_(err, maxAttempts_))))
         throw err
-      await cbErr_?.()
     }
-  if (maxAttempts_ < 0)
-    throw new InsErr("Max attempts must be at least 1")
-  else
-    throw new InsErr("Operation aborted")
 }
 
 
 
 /**
- * Asynchronously sleep.
+ * Alias for `setTimeout`.
  *
  * @param ms_ - The number of milliseconds to sleep.
- * @param abs_ - An optional AbortSignal to abort the sleep.
- * @throws {InsErr} If the sleep is aborted before or during the wait.
+ * @remarks The delay is a minimum, not an exact duration. The actual elapsed time also includes timer scheduling, event-loop latency, and promise-continuation overhead, so it may exceed {@link ms_}, especially for short delays.
  */
-export async function sleep(ms_: number, abs_?: AbortSignal): Promise<void> {
-  if (abs_?.aborted)
-    return Promise.reject(new InsErr("Sleep aborted before start"))
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      abs_?.removeEventListener("abort", onAbort)
-      resolve()
-    }, ms_)
-
-    function onAbort() {
-      clearTimeout(timeout)
-      abs_?.removeEventListener("abort", onAbort)
-      reject(new InsErr("Sleep aborted during wait"))
-    }
-    abs_?.addEventListener("abort", onAbort, { once: true })
-  })
-}
+export function sleep(ms_: number): Promise<void> { return new Promise<void>(r => setTimeout(r, ms_)) }
 
 
 
@@ -202,12 +182,12 @@ export const BASE122_SHORT = 0b111 as const
  *
  * @param data_ - An array-like object containing the data to be encoded.
  * @returns A string representing the base-122 encoded data.
- * @throws If somehow malformed UTF-8 data is generated, the {@link TextDecoder} will throw an error (shouldn't happen if the input is valid).
  * @remarks The high density might not be suitable for all use cases, especially if the medium used to transmit the data has limitations on character sets or encoding.
  * @see {@link TextDecoder} how the output string is generated from the byte array (this step is necessary for accurate translation to a string).
  */
 export function encode122(data_: ArrayLike<number>): string {
-  const out: number[] = []
+  const out = new Uint8Array(2 * Math.ceil(data_.length * 8 / 7))
+  let outIndex = 0
   let byteIndex = 0
   let bitIndex = 0
 
@@ -230,17 +210,16 @@ export function encode122(data_: ArrayLike<number>): string {
   for (let value = next7(); value !== undefined; value = next7()) {
     const illegalIndex = BASE122_ILLEGAL_INDEX[value]
     if (illegalIndex === undefined)
-      out.push(value)
+      out[outIndex++] = value
     else {
       const next = next7()
       const payload = next ?? value
-      out.push(
+      out[outIndex++] =
         0b11000010 | ((next === undefined ? BASE122_SHORT : illegalIndex) << 2) | (payload >>> 6),
-        0b10000000 | (payload & 0b00111111),
-      )
+      out[outIndex++] = 0b10000000 | (payload & 0b00111111)
     }
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(out))
+  return new TextDecoder("utf-8", { fatal: true }).decode(out.subarray(0, outIndex))
 }
 
 
@@ -278,7 +257,7 @@ export function decode122(base122_: string) {
     if (illegalIndex < BASE122_ILLEGAL.length)
       push7(BASE122_ILLEGAL[illegalIndex]!)
     else if (illegalIndex !== BASE122_SHORT)
-      throw new InsErr(`Invalid base-122 illegal index ${illegalIndex} at position ${i}`)
+      throw new Err(`Invalid base-122 illegal index ${illegalIndex} at position ${i}`)
     push7(code & 0b01111111)
   }
 
