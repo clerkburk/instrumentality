@@ -472,6 +472,9 @@ export class File extends Road {
 }
 
 
+export function file(...args: ConstructorParameters<typeof File>): File { return new File(...args) }
+
+
 
 /** Helper type for filtering {@link Road} instances. */
 export type filter_t<T extends Road> = ((road: Road) => road is T)
@@ -622,6 +625,9 @@ export class Folder extends Road {
 }
 
 
+export function folder(...args: ConstructorParameters<typeof Folder>): Folder { return new Folder(...args) }
+
+
 export function sysRoot() { return new Folder(ph.parse(process.cwd()).root, false) }
 export function home() { return new Folder(os.homedir(), false) }
 export function tmp() { return new Folder(os.tmpdir(), false) }
@@ -679,7 +685,12 @@ export class SymbolicLink extends Road {
   override isSymlink(): this is SymbolicLink { return true as const }
   override isSymbolicLink(): this is SymbolicLink { return true as const }
 }
+
+
 export { SymbolicLink as Symlink }
+
+
+export function symlink(...args: ConstructorParameters<typeof SymbolicLink>): SymbolicLink { return new SymbolicLink(...args) }
 
 
 
@@ -716,18 +727,22 @@ export class BlockDevice extends UnusableRoad {
   checkSync(): boolean { try { return fs.lstatSync(this.isAt).isBlockDevice() } catch { return false } }
   override isBlockDevice(): this is BlockDevice { return true as const }
 }
+export function blockDevice(...args: ConstructorParameters<typeof BlockDevice>): BlockDevice { return new BlockDevice(...args) }
 export class CharacterDevice extends UnusableRoad {
   async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isCharacterDevice() } catch { return false } }
   checkSync(): boolean { try { return fs.lstatSync(this.isAt).isCharacterDevice() } catch { return false } }
   override isCharacterDevice(): this is CharacterDevice { return true as const }
 }
+export function characterDevice(...args: ConstructorParameters<typeof CharacterDevice>): CharacterDevice { return new CharacterDevice(...args) }
 export class Fifo extends UnusableRoad {
   async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isFIFO() } catch { return false } }
   checkSync(): boolean { try { return fs.lstatSync(this.isAt).isFIFO() } catch { return false } }
   override isFifo(): this is Fifo { return true as const }
 }
+export function fifo(...args: ConstructorParameters<typeof Fifo>): Fifo { return new Fifo(...args) }
 export class Socket extends UnusableRoad {
   async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isSocket() } catch { return false } }
   checkSync(): boolean { try { return fs.lstatSync(this.isAt).isSocket() } catch { return false } }
   override isSocket(): this is Socket { return true as const }
 }
+export function socket(...args: ConstructorParameters<typeof Socket>): Socket { return new Socket(...args) }
