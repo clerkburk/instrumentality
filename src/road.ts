@@ -112,7 +112,7 @@ export abstract class Road {
   /** The amount of path segments in the absolute path to the file or directory represented by this Road instance, minus one (i.e., the depth of the path in the file system hierarchy). */
   get depth() { return this.isAt.split(ph.sep).length - 1 }
   /** Same as {@link isAt} but for compatibility with external APIs. */
-  toString() { return this.isAt }
+  toString(): string { return this.isAt }
 
   /**
    * Creates a new instance of the Road class.
@@ -147,52 +147,32 @@ export abstract class Road {
   /** @returns An array of {@link Folder} instances representing the ancestors of the current road. */
   ancestors(): Folder[] { return [...this.ancestorsIt()] }
 
-  /**
-   * Aquires a lock for the path represented by this Road instance, preventing concurrent modifications from this and other Road instances pointing to the same path.
-   * 
-   * @returns An object with a dispose method that releases the lock when called.
-   * @throws If the road is immutable, a {@link Err} will be thrown.
-   * 
-   * @remarks This method MUST be used with a `using` statement to ensure that the lock is released properly. Failing to do so WILL result in deadlocks and other concurrency issues.
-   * Non-deterministic release is unfortunately not possible due to the nature of JavaScript's garbage collection, thus the lock must be released deterministically by the user (for which the `using` statement is a convenient way to do so).
-   * @remarks Methods may call other methods that each acquire their own locks, and release them independently, meaning from the perspective of other instances, the lock may appear to be free even if the original method still has work to do.
-   * To fix this, it's recommeneded to aquire a lock at the beginning and use fs/fp operations within the locked context.
-   */
-  protected async lock(): Promise<Disposable & AsyncDisposable> {
+  protected reserveLock(allowConcurrent: boolean): Disposable & { previous: Promise<void> | undefined } {
     if (!this.mutable)
       throw new Err(`Road to '${this.isAt}' is immutable.`)
     lockedRoads ??= new Map()
     const { promise, resolve } = Promise.withResolvers<void>()
-    const previous = lockedRoads.get(this.isAt)
-    lockedRoads.set(this.isAt, promise)
     const isAt = this.isAt
-    const dispose = () => {
-      resolve()
-      if (lockedRoads!.get(isAt) === promise)
-        lockedRoads!.delete(isAt)
-    }
-    await previous
-    return { [Symbol.dispose]: dispose, [Symbol.asyncDispose]: dispose as any }
-  }
-  /**
-   * Sync version of {@link lock}.
-   * @throws If the road is currently locked by another operation as it cannot wait for the lock to be released in a synchronous context.
-   */
-  protected lockSync(): Disposable & AsyncDisposable {
-    if (!this.mutable)
-      throw new Err(`Road to '${this.isAt}' is immutable.`)
-    lockedRoads ??= new Map()
-    const { promise, resolve } = Promise.withResolvers<void>()
-    if (lockedRoads.has(this.isAt))
+    const previous = lockedRoads.get(this.isAt)
+    if (!allowConcurrent && previous)
       throw new Err(`Road to '${this.isAt}' is already locked.`)
     lockedRoads.set(this.isAt, promise)
-    const isAt = this.isAt
-    const dispose = () => {
-      resolve()
-      if (lockedRoads!.get(isAt) === promise)
-        lockedRoads!.delete(isAt)
+    return {
+      [Symbol.dispose]: () => {
+        resolve()
+        if (lockedRoads!.get(isAt) === promise)
+          lockedRoads!.delete(isAt)
+      },
+      previous,
     }
-    return { [Symbol.dispose]: dispose, [Symbol.asyncDispose]: dispose as any }
+  }
+  async lock(): Promise<Disposable> {
+    const l = this.reserveLock(true)
+    try { await l.previous } catch {}
+    return l
+  }
+  lockSync(): Disposable {
+    return this.reserveLock(false)
   }
 
   /**
@@ -256,14 +236,14 @@ export abstract class Road {
     using _ = this.lockSync()
     fs.rmSync(this.isAt, { recursive: true, force: true })
   }
-  async copy(into_: Folder, options_?: fs.CopyOptions): Promise<this> {
+  async copy(into_: Folder): Promise<this> {
     const newPath = into_.join(this.name)
-    await fp.cp(this.isAt, newPath, { recursive: true, ...options_ })
+    await fp.cp(this.isAt, newPath, { recursive: true, force: true })
     return new (this.constructor as new (path: string, typeCheck: boolean) => this)(newPath, false)
   }
-  copySync(into_: Folder, options_?: fs.CopySyncOptions): this {
+  copySync(into_: Folder): this {
     const newPath = into_.join(this.name)
-    fs.cpSync(this.isAt, newPath, { recursive: true, ...options_ })
+    fs.cpSync(this.isAt, newPath, { recursive: true, force: true })
     return new (this.constructor as new (path: string, typeCheck: boolean) => this)(newPath, false)
   }
   async move(into_: Folder): Promise<void> {
@@ -290,7 +270,6 @@ export abstract class Road {
     fs.renameSync(this.isAt, newPath)
     this.pointsTo = newPath
   }
-
 
   // jsdocs for the abstract methods are in the subclasses
   abstract check(): Promise<boolean>
@@ -333,17 +312,17 @@ export class File extends Road {
    * @returns A promise that resolves to the newly created `File` instance.
    * @throws if {@link fp.writeFile} throws.
    */
-  static async create(at_: string) {
+  static async create(at_: string, data: string | Buffer = "") {
     try { await fp.access(at_, fsc.W_OK) }
-    catch { await fp.writeFile(at_, "") }
+    catch { await fp.writeFile(at_, data) }
     return new File(at_, true)
   }
   /** Alias for {@link File.create}. */
   static readonly mk: typeof File.create = File.create
   /** Synchronous version of {@link File.create}. */
-  static createSync(at_: string) {
+  static createSync(at_: string, data: string | Buffer = "") {
     try { fs.accessSync(at_, fs.constants.W_OK) }
-    catch { fs.writeFileSync(at_, "") }
+    catch { fs.writeFileSync(at_, data) }
     return new File(at_, true)
   }
   /** Alias for {@link File.createSync}. */
@@ -361,67 +340,25 @@ export class File extends Road {
    * @throws If the file can't be read due to permission issues or other filesystem errors.
    */
   async read(): Promise<Buffer>
-  async read(encoding_: BufferEncoding, flag_?: string): Promise<string>
-  async read(encoding_?: BufferEncoding, flag_?: string): Promise<Buffer | string> {
-    if (encoding_)
-      return fp.readFile(this.isAt, { encoding: encoding_, flag: flag_ })
-    else
-      return fp.readFile(this.isAt)
+  async read(options_: Parameters<typeof fp.readFile>[1]): Promise<string>
+  async read(options_?: Parameters<typeof fp.readFile>[1]): Promise<Buffer | string> {
+    return fp.readFile(this.isAt, options_!)
   }
   readSync(): Buffer
-  readSync(encoding_: BufferEncoding, flag_?: string): string
-  readSync(encoding_?: BufferEncoding, flag_?: string): Buffer | string {
-    if (encoding_)
-      return fs.readFileSync(this.isAt, { encoding: encoding_, flag: flag_ })
-    else
-      return fs.readFileSync(this.isAt)
+  readSync(options_: Parameters<typeof fs.readFileSync>[1]): string
+  readSync(options_?: Parameters<typeof fs.readFileSync>[1]): Buffer | string {
+    return fs.readFileSync(this.isAt, options_!)
   }
 
-  async sameAs(other_: File): Promise<boolean> {
-    if (this.isAt === other_.isAt)
-      return true
-    else if ((await fp.lstat(this.isAt)).size !== (await fp.lstat(other_.isAt)).size)
-      return false
-    const iter1 = this.itBuff()
-    const iter2 = other_.itBuff()
-    while (true) {
-      const [a, b] = await Promise.all([iter1.next(), iter2.next()])
-      if (a.done && b.done) return true
-      if (a.done !== b.done) return false
-      if (!a.value!.equals(b.value!)) return false
-    }
-  }
-  sameAsSync(other_: File): boolean {
-    if (this.isAt === other_.isAt)
-      return true
-    else if (fs.lstatSync(this.isAt).size !== fs.lstatSync(other_.isAt).size)
-      return false
-    const iter1 = this.itBuffSync()
-    const iter2 = other_.itBuffSync()
-    while (true) {
-      const a = iter1.next()
-      const b = iter2.next()
-      if (a.done && b.done) return true
-      if (a.done !== b.done) return false
-      if (!a.value!.equals(b.value!)) return false
-    }
-  }
-  
-  async *itBuff(chunkSize_: number = 64 * 1024, flags_: string | number = 'r', mode_?: fs.Mode) {
-    const fd = await fp.open(this.isAt, flags_, mode_)
+  async *itBuff(options_?: fs.ReadStreamOptions): AsyncGenerator<Buffer> {
+    const stream = fs.createReadStream(this.isAt, { ...options_, encoding: undefined })
     try {
-      const buffer = Buffer.alloc(chunkSize_)
-      let bytesRead: number
-      do {
-        bytesRead = (await fd.read(buffer, 0, chunkSize_, null)).bytesRead
-        if (bytesRead > 0)
-          yield Buffer.from(buffer.subarray(0, bytesRead))
-      } while (bytesRead === chunkSize_)
-    } finally {
-      await fd.close()
+      for await (const chunk of stream)
+        yield chunk
     }
+    finally { if (!stream.destroyed) stream.destroy() }
   }
-  *itBuffSync(chunkSize_: number = 64 * 1024, flags_: string | number = 'r', mode_?: fs.Mode) {
+  *itBuffSync(chunkSize_: number = 64 * 1024, flags_: string | number = 'r', mode_?: fs.Mode): Generator<Buffer> {
     const fd = fs.openSync(this.isAt, flags_, mode_)
     try {
       const buffer = Buffer.alloc(chunkSize_)
@@ -431,43 +368,47 @@ export class File extends Road {
         if (bytesRead > 0)
           yield Buffer.from(buffer.subarray(0, bytesRead))
       } while (bytesRead === chunkSize_)
-    } finally {
-      fs.closeSync(fd)
     }
+    finally { fs.closeSync(fd) }
   }
-  async *itLines(chunkSize_: number = 64 * 1024, flags_: string | number = 'r', mode_?: fs.Mode) {
-    const decoder = new TextDecoder("utf-8", { fatal: true })
-    let carry = ""
 
-    for await (const chunk of this.itBuff(chunkSize_, flags_, mode_)) {
-      carry += decoder.decode(chunk, { stream: true })
-      let newlineINdex: number
-      while ((newlineINdex = carry.indexOf("\n")) !== -1) {
-        const line = carry.slice(0, newlineINdex)
-        yield line.endsWith("\r") ? line.slice(0, -1) : line
-        carry = carry.slice(newlineINdex + 1)
+  async sameAs(other_: File): Promise<boolean> {
+    if (this.isAt === other_.isAt) return true
+    const [s1, s2] = await Promise.all([this.size(), other_.size()])
+    if (s1 !== s2) return false
+    if (s1 === 0) return true
+    const iter1 = this.itBuff()
+    const iter2 = other_.itBuff()
+    try {
+      while (true) {
+        const [a, b] = await Promise.all([iter1.next(), iter2.next()])
+        if (a.done && b.done) return true
+        if (a.done !== b.done) return false
+        if (!a.value.equals(b.value)) return false
       }
     }
-    carry += decoder.decode()
-    if (carry.length > 0)
-      yield carry.endsWith("\r") ? carry.slice(0, -1) : carry
+    finally { await Promise.all([iter1.return?.(undefined), iter2.return?.(undefined)]) }
   }
-  *itLinesSync(chunkSize_: number = 64 * 1024, flags_: string | number = 'r', mode_?: fs.Mode) {
-    const decoder = new TextDecoder("utf-8", { fatal: true })
-    let carry = ""
-
-    for (const chunk of this.itBuffSync(chunkSize_, flags_, mode_)) {
-      carry += decoder.decode(chunk, { stream: true })
-      let newlineINdex: number
-      while ((newlineINdex = carry.indexOf("\n")) !== -1) {
-        const line = carry.slice(0, newlineINdex)
-        yield line.endsWith("\r") ? line.slice(0, -1) : line
-        carry = carry.slice(newlineINdex + 1)
+  sameAsSync(other_: File): boolean {
+    if (this.isAt === other_.isAt) return true
+    const [s1, s2] = [this.sizeSync(), other_.sizeSync()]
+    if (s1 !== s2) return false
+    if (s1 === 0) return true
+    const iter1 = this.itBuffSync()
+    const iter2 = other_.itBuffSync()
+    try {
+      while (true) {
+        const a = iter1.next()
+        const b = iter2.next()
+        if (a.done && b.done) return true
+        if (a.done !== b.done) return false
+        if (!a.value!.equals(b.value!)) return false
       }
     }
-    carry += decoder.decode()
-    if (carry.length > 0)
-      yield carry.endsWith("\r") ? carry.slice(0, -1) : carry
+    finally {
+      try { iter1.return?.(undefined) } catch {}
+      try { iter2.return?.(undefined) } catch {}
+    }
   }
 
   async hash(algorithm_?: string, options_?: cr.HashOptions): Promise<Buffer>
@@ -492,17 +433,19 @@ export class File extends Road {
 
   async writeAtomic(data_: Buffer | string, options_?: fs.WriteFileOptions) {
     using _ = await this.lock()
-    const temp = await Temp(File) // Don't use `using` as we won't clean it up
-    await fp.rename(temp.isAt, this.parent().join(temp.name)) // Move temp file to the same directory as the target
-    await fp.writeFile(temp.isAt, data_, options_) // Write data to the temp file
-    await fp.rename(temp.isAt, this.isAt) // Replace the target file with the temp file atomically
+    await this.parent().borrow(File, async tmp => {
+      using _ = await tmp.lock()
+      await fp.writeFile(tmp.isAt, data_, options_)
+      await fp.rename(tmp.isAt, this.isAt)
+    })
   }
   writeAtomicSync(data_: Buffer | string, options_?: fs.WriteFileOptions) {
     using _ = this.lockSync()
-    const temp = TempSync(File) // Don't use `using` as we won't clean it up
-    fs.renameSync(temp.isAt, this.parent().join(temp.name)) // Move temp file to the same directory as the target
-    fs.writeFileSync(temp.isAt, data_, options_) // Write data to the temp file
-    fs.renameSync(temp.isAt, this.isAt) // Replace the target file with the temp file atomically
+    this.parent().borrowSync(File, tmp => {
+      using _ = tmp.lockSync()
+      fs.writeFileSync(tmp.isAt, data_, options_)
+      fs.renameSync(tmp.isAt, this.isAt)
+    })
   }
 
   async write(data_: Buffer | string, options_?: fs.WriteFileOptions) {
@@ -574,18 +517,13 @@ export class Folder extends Road {
   async list<T extends Road>(filter_: filter_t<T>): Promise<T[]>
   async list<T extends Road>(filter_?: filter_t<T>): Promise<Road[] | T[]> {
     const entries = (await fp.readdir(this.isAt, { withFileTypes: true })).map(e => new (resolveDirent(e))(this.join(e.name), false))
-    const resolvedEntries = await Promise.all(entries)
-    if (!filter_)
-      return resolvedEntries
-    return resolvedEntries.filter(entry => filter_(entry))
+    return filter_ ? entries.filter(entry => filter_(entry)) : entries
   }
   listSync(): Road[]
   listSync<T extends Road>(filter_: filter_t<T>): T[]
   listSync<T extends Road>(filter_?: filter_t<T>): Road[] | T[] {
     const entries = fs.readdirSync(this.isAt, { withFileTypes: true }).map(e => new (resolveDirent(e))(this.join(e.name), false))
-    if (!filter_)
-      return entries
-    return entries.filter(entry => filter_(entry))
+    return filter_ ? entries.filter(entry => filter_(entry)) : entries
   }
 
   walk(): AsyncIterable<Road>
@@ -623,9 +561,8 @@ export class Folder extends Road {
       if (found instanceof expect_)
         return found as T
       return null
-    } catch {
-      return null
     }
+    catch { return null }
   }
   findSync(name_: string): Road | null
   findSync<T extends Road>(name_: string, expect_: road_t<T>): T | null
@@ -637,20 +574,30 @@ export class Folder extends Road {
       if (found instanceof expect_)
         return found as T
       return null
-    } catch(e: unknown) {
-      return null
     }
+    catch(e: unknown) { return null }
   }
 
-  async add<T extends Road>(name_: string, createable_: { create: (at: string) => Promise<T> }): Promise<T> {
+  async add<T extends Road>(name_: string, createable_: { mk: (at: string) => Promise<T> }): Promise<T> {
     const newPath = this.join(name_)
-    await createable_.create(newPath)
+    await createable_.mk(newPath)
     return (await factory(newPath)) as unknown as T
   }
-  addSync<T extends Road>(name_: string, createable_: { createSync: (at: string) => T }): T {
+  addSync<T extends Road>(name_: string, createable_: { mkSync: (at: string) => T }): T {
     const newPath = this.join(name_)
-    createable_.createSync(newPath)
+    createable_.mkSync(newPath)
     return factorySync(newPath) as unknown as T
+  }
+
+  async borrow<T extends Road>(createable_: { mk: (at: string) => Promise<T> }, cb_: (r: T) => Promise<void> | void): Promise<void> {
+    const path = this.join(`instrumentality@${crypto.randomUUID()}`)
+    try { await cb_(await createable_.mk(path)) }
+    finally { await fp.rm(path, { recursive: true, force: true }) }
+  }
+  borrowSync<T extends Road>(createable_: { mkSync: (at: string) => T }, cb_: (r: T) => void): void {
+    const path = this.join(`instrumentality@${crypto.randomUUID()}`)
+    try { cb_(createable_.mkSync(path)) }
+    finally { fs.rmSync(path, { recursive: true, force: true }) }
   }
 
   async size(): Promise<number> {
@@ -733,7 +680,6 @@ export class SymbolicLink extends Road {
   override isSymbolicLink(): this is SymbolicLink { return true as const }
 }
 export { SymbolicLink as Symlink }
-here().walk(r => !r.isSymlink())
 
 
 
@@ -784,68 +730,4 @@ export class Socket extends UnusableRoad {
   async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isSocket() } catch { return false } }
   checkSync(): boolean { try { return fs.lstatSync(this.isAt).isSocket() } catch { return false } }
   override isSocket(): this is Socket { return true as const }
-}
-
-
-
-export async function Temp<T extends Road>(createable_: { create: (at: string) => Promise<T> }): Promise<T & Disposable & AsyncDisposable> {
-  let t = await createable_.create(tmp().join(`instrumentality@${cr.randomUUID()}`))
-  return Object.assign(t, {
-    [Symbol.dispose]() { try { t.deleteSync() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) },
-    async [Symbol.asyncDispose]() { try { await t.delete() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) }
-  })
-}
-export function TempSync<T extends Road>(createable_: { createSync: (at: string) => T }): T & Disposable & AsyncDisposable {
-  let t = createable_.createSync(tmp().join(`instrumentality@${cr.randomUUID()}`))
-  return Object.assign(t, {
-    [Symbol.dispose]() { try { t.deleteSync() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) },
-    async [Symbol.asyncDispose]() { try { await t.delete() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) }
-  })
-}
-
-
-let finalizer: FinalizationRegistry<string> | null = null
-let toDelete: Set<string> | null = null
-let exitHandlerRegistered: boolean | null = null
-/**
- * Forcefully cleans up all files and folders registered for cleanup on exit.
- */
-function forceCleanupToDelete() {
-  for (const path of toDelete ?? [])
-    try { fs.rmSync(path, { force: true, recursive: true }) } catch {}
-  toDelete?.clear()
-  toDelete = null
-  finalizer = null
-  if (exitHandlerRegistered)
-    process.off('exit', forceCleanupToDelete)
-  exitHandlerRegistered = false
-}
-export function registerToCleanup(self_: Road) {
-  finalizer ??= new FinalizationRegistry<string>(p => { try { fs.rmSync(p, { force: true, recursive: true }) } catch {}; toDelete?.delete(p) })
-  toDelete ??= new Set()
-  if (!exitHandlerRegistered) {
-    process.once('exit', forceCleanupToDelete)
-    exitHandlerRegistered = true
-  }
-  toDelete.add(self_.isAt)
-  finalizer.register(self_, self_.isAt, self_)
-}
-
-
-export async function AutoTemp<T extends Road>(createable_: { mk: (at: string) => Promise<T> }): Promise<T & Disposable & AsyncDisposable> {
-  let t = await createable_.mk(tmp().join(`instrumentality@${cr.randomUUID()}`))
-  registerToCleanup(t)
-  return Object.freeze(Object.assign(t, {
-    [Symbol.dispose]() { try { t.deleteSync() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) },
-    async [Symbol.asyncDispose]() { try { await t.delete() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) }
-  }))
-}
-export function AutoTempSync<T extends Road>(createable_: { mk: (at: string) => T }, autoCleanup_: boolean): T & Disposable & AsyncDisposable {
-  let t = createable_.mk(tmp().join(`instrumentality@${cr.randomUUID()}`))
-  if (autoCleanup_)
-    registerToCleanup(t)
-  return Object.freeze(Object.assign(t, {
-    [Symbol.dispose]() { try { t.deleteSync() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) },
-    async [Symbol.asyncDispose]() { try { await t.delete() } catch {} toDelete?.delete(t.isAt); finalizer?.unregister(t) }
-  }))
 }

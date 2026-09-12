@@ -1,9 +1,7 @@
-![white title](./assets/titleLight.webp)
-
-
 ## The INSTRUMENTALITY project (concept)
 A utility library for TypeScript/Node.js
 
+![white title](./assets/titleLight.webp)
 
 #
 ### What is this?
@@ -19,7 +17,7 @@ then
 ```ts
 import * as ins from "instrumentality" // Base
 import * as ind from "instrumentality/dom" // Browser (if available)
-import * as inr from "instrumentality/road" // Filesystem using Node.js (if available)
+import * as inr from "instrumentality/road" // Filesystem using Node.js (if available, deno 2 support is experimental)
 ```
 thats literally it
 
