@@ -350,7 +350,7 @@ export class File extends Road {
     return fs.readFileSync(this.isAt, options_!)
   }
 
-  async *itBuff(options_?: fs.ReadStreamOptions): AsyncGenerator<Buffer> {
+  async *itBuff(options_?: Exclude<Parameters<typeof fs.createReadStream>[1], BufferEncoding> & {encoding?:never}): AsyncGenerator<Buffer> {
     const stream = fs.createReadStream(this.isAt, { ...options_, encoding: undefined })
     try {
       for await (const chunk of stream)
@@ -412,16 +412,16 @@ export class File extends Road {
   }
 
   async hash(algorithm_?: string, options_?: cr.HashOptions): Promise<Buffer>
-  async hash(algorithm_?: string, options_?: cr.HashOptions, encoding_?: BufferEncoding): Promise<string>
-  async hash(algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: BufferEncoding): Promise<Buffer | string> {
+  async hash(algorithm_?: string, options_?: cr.HashOptions, encoding_?: Parameters<typeof cr.Hash.prototype.digest>[0]): Promise<string>
+  async hash(algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: Parameters<typeof cr.Hash.prototype.digest>[0]): Promise<Buffer | string> {
     const hash = cr.createHash(algorithm_, options_)
     for await (const chunk of this.itBuff())
       hash.update(chunk)
     return encoding_ ? hash.digest(encoding_) : hash.digest()
   }
   hashSync(algorithm_?: string, options_?: cr.HashOptions): Buffer
-  hashSync(algorithm_?: string, options_?: cr.HashOptions, encoding_?: BufferEncoding): string
-  hashSync(algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: BufferEncoding): Buffer | string {
+  hashSync(algorithm_?: string, options_?: cr.HashOptions, encoding_?: Parameters<typeof cr.Hash.prototype.digest>[0]): string
+  hashSync(algorithm_ = "sha256", options_?: cr.HashOptions, encoding_?: Parameters<typeof cr.Hash.prototype.digest>[0]): Buffer | string {
     const hash = cr.createHash(algorithm_, options_)
     for (const chunk of this.itBuffSync())
       hash.update(chunk)
@@ -684,7 +684,7 @@ export { SymbolicLink as Symlink }
 
 
 export abstract class UnusableRoad extends Road {
-  override readonly mutable: boolean = false // Modification will cause system issues (e.g. deleting a device file)
+  override readonly mutable = false as const // Modification will cause system issues (e.g. deleting a device file)
   async size(): Promise<0> { return 0 }
   sizeSync(): 0 { return 0 }
   error(): never { throw new Err(`${this.constructor.name} at '${this.isAt}' is a system-level resource thus not subject to modification.`) }

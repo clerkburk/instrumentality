@@ -5,14 +5,14 @@
     "url": "https://github.com/clerkburk/instrumentality.git"
   },
   "type": "module",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "main": "./dist/base.js",
   "types": "./dist/base.d.ts",
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "^4.1.11",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "@types/node": "latest",
+    "@vitest/coverage-v8": "latest",
+    "typescript": "latest",
+    "vitest": "latest"
   },
   "exports": {
     ".": {
