@@ -177,6 +177,10 @@ export const BASE122_ILLEGAL_INDEX: Readonly<Record<number, number>> = {
 export const BASE122_SHORT = 0b111 as const
 
 
+/** Lazy-initialized TextDecoder instance used for decoding base-122 encoded data. */
+let DECODER: TextDecoder
+
+
 /**
  * Encodes indexed data into a base-122 representation.
  *
@@ -219,7 +223,7 @@ export function encode122(data_: ArrayLike<number>): string {
       out[outIndex++] = 0b10000000 | (payload & 0b00111111)
     }
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(out.subarray(0, outIndex))
+  return (DECODER ??= new TextDecoder("utf-8", { fatal: true })).decode(out.subarray(0, outIndex))
 }
 
 

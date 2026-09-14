@@ -351,7 +351,7 @@ export class File extends Road {
   }
 
   async *itBuff(options_?: Exclude<Parameters<typeof fs.createReadStream>[1], BufferEncoding> & {encoding?:never}): AsyncGenerator<Buffer> {
-    const stream = fs.createReadStream(this.isAt, { ...options_, encoding: undefined })
+    const stream = fs.createReadStream(this.isAt, { ...options_ })
     try {
       for await (const chunk of stream)
         yield chunk
@@ -455,6 +455,42 @@ export class File extends Road {
   writeSync(data_: Buffer | string, options_?: fs.WriteFileOptions) {
     using _ = this.lockSync()
     fs.writeFileSync(this.isAt, data_, options_)
+  }
+  async writePast(offset_: number, data_: Buffer | string) {
+    using _ = await this.lock()
+    const fd = await fp.open(this.isAt, 'r+')
+    try {
+      const buf = typeof data_ === 'string' ? Buffer.from(data_) : data_
+      await fd.write(buf, 0, buf.length, offset_)
+    } finally { await fd.close() }
+  }
+  writePastSync(offset_: number, data_: Buffer | string) {
+    using _ = this.lockSync()
+    const fd = fs.openSync(this.isAt, 'r+')
+    try {
+      const buf = typeof data_ === 'string' ? Buffer.from(data_) : data_
+      fs.writeSync(fd, buf, 0, buf.length, offset_)
+    } finally { fs.closeSync(fd) }
+  }
+  async truncWritePast(offset_: number, data_: Buffer | string) {
+    using _ = await this.lock()
+    const fd = await fp.open(this.isAt, 'r+')
+    try {
+      const buf = typeof data_ === 'string' ? Buffer.from(data_) : data_
+      await fd.write(buf, 0, buf.length, offset_)
+      await fd.truncate(offset_ + buf.length)
+    }
+    finally { await fd.close() }
+  }
+  truncWritePastSync(offset_: number, data_: Buffer | string) {
+    using _ = this.lockSync()
+    const fd = fs.openSync(this.isAt, 'r+')
+    try {
+      const buf = typeof data_ === 'string' ? Buffer.from(data_) : data_
+      fs.writeSync(fd, buf, 0, buf.length, offset_)
+      fs.truncateSync(this.isAt, offset_ + buf.length)
+    }
+    finally { fs.closeSync(fd) }
   }
   async append(data_: Buffer | string, options_?: fs.WriteFileOptions) {
     using _ = await this.lock()
@@ -626,6 +662,7 @@ export class Folder extends Road {
 
 
 export function folder(...args: ConstructorParameters<typeof Folder>): Folder { return new Folder(...args) }
+export function dir(...args: ConstructorParameters<typeof Folder>): Folder { return new Folder(...args) }
 
 
 export function sysRoot() { return new Folder(ph.parse(process.cwd()).root, false) }
