@@ -1,9 +1,9 @@
 /**
  * Resolves on `DOMContentLoaded` or immediately if the document is already ready.
  */
-export async function onceReady(): Promise<void> {
+export function onceReady(): Promise<void> {
   if (document.readyState === "complete" || document.readyState === "interactive")
-    return
+    return Promise.resolve()
   return new Promise(r => document.addEventListener("DOMContentLoaded", () => r(), { once: true }))
 }
 

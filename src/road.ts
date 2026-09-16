@@ -58,25 +58,6 @@ export { resolveDirent as resDirent }
 
 
 /**
- * Creates the appropriate subclass of {@link Road} based on the file mode of the specified path.
- *
- * @param path_ The path to follow.
- * @returns A new instance of {@link Road}.
- * @throws If {@link fp.lstat}/{@link fs.lstatSync} fails to retrieved the status of {@link path_}.
- */
-export async function factory(path_: string) {
-  return new (resolveStat((await fp.lstat(path_)).mode))(path_, false)
-}
-export { factory as fac, factory as mk }
-/** Sync version of {@link factory}. */
-export function factorySync(path_: string) {
-  return new (resolveStat(fs.lstatSync(path_).mode))(path_, false)
-}
-export { factorySync as facSync, factorySync as mkSync }
-
-
-
-/**
  * A map that keeps track of locked roads to prevent concurrent modifications.
  * 
  * @key The **absolute** and **normalized** (**resolved**) path of the road that is currently locked.
@@ -124,7 +105,7 @@ export abstract class Road {
    */
   constructor(path_: string, typeCheck_: boolean) {
     this.pointsTo = ph.resolve(path_)
-    if (typeCheck_ && !this.checkSync())
+    if (typeCheck_ && !this.checkSync(true))
       throw new Err(`Type mismatch: '${this.isAt}'`)
   }
 
@@ -168,7 +149,7 @@ export abstract class Road {
   }
   async lock(): Promise<Disposable> {
     const l = this.reserveLock(true)
-    try { await l.previous } catch {}
+    try { await l.previous } catch { null }
     return l
   }
   lockSync(): Disposable {
@@ -188,7 +169,7 @@ export abstract class Road {
   async untilAccessible(abs: AbortSignal, expectMode = fsc.F_OK, cb_?: (err: unknown) => unknown): Promise<void> {
     const watcher = fs.watch(this.isAt)
     try {
-      for await (let _ of on(watcher, 'change', { signal: abs })) {
+      for await (const _ of on(watcher, 'change', { signal: abs })) {
         try {
           await fp.access(this.isAt, expectMode)
           return
@@ -209,7 +190,7 @@ export abstract class Road {
   async onChange<T>(abs_: AbortSignal, cb_?: () => T) {
     const watcher = fs.watch(this.isAt)
     try {
-      for await (let _ of on(watcher, 'change', { signal: abs_ }))
+      for await (const _ of on(watcher, 'change', { signal: abs_ }))
         return await cb_?.() ?? null
       return null
     }
@@ -272,8 +253,8 @@ export abstract class Road {
   }
 
   // jsdocs for the abstract methods are in the subclasses
-  abstract check(): Promise<boolean>
-  abstract checkSync(): boolean
+  abstract check(throwOnError_: boolean): Promise<boolean>
+  abstract checkSync(throwOnError_: boolean): boolean
 
   /** Type narrowing for {@link File} (similar to `instanceof` without unnecessary runtime checks). */
   isFile(): this is File { return false as const }
@@ -298,8 +279,29 @@ export abstract class Road {
   /** Type narrowing for {@link Socket} (similar to `instanceof` without unnecessary runtime checks). */
   isSocket(): this is Socket { return false as const }
 }
+
+
+
 /** Constructor type for a subclass of {@link Road}. */
 export type road_t<T extends Road> = new (...args_: ConstructorParameters<typeof Road>) => T
+
+  
+
+
+
+/**
+ * Creates the appropriate subclass of {@link Road} based on the file mode of the specified path.
+ *
+ * @param path_ The path to follow.
+ * @returns A new instance of {@link Road}.
+ * @throws If {@link fp.lstat}/{@link fs.lstatSync} fails to retrieved the status of {@link path_}.
+ */
+export async function road(path_: string) { return new (resolveStat((await fp.lstat(path_)).mode))(path_, false) }
+export { road as fac, road as mk, road as factory }
+/** Sync version of {@link road}. */
+export function roadSync(path_: string) { return new (resolveStat((fs.lstatSync(path_).mode)))(path_, false) }
+export { roadSync as facSync, roadSync as mkSync, roadSync as factorySync }
+
 
 
 
@@ -342,7 +344,7 @@ export class File extends Road {
   async read(): Promise<Buffer>
   async read(options_: Parameters<typeof fp.readFile>[1]): Promise<string>
   async read(options_?: Parameters<typeof fp.readFile>[1]): Promise<Buffer | string> {
-    return fp.readFile(this.isAt, options_!)
+    return await fp.readFile(this.isAt, options_!)
   }
   readSync(): Buffer
   readSync(options_: Parameters<typeof fs.readFileSync>[1]): string
@@ -406,8 +408,8 @@ export class File extends Road {
       }
     }
     finally {
-      try { iter1.return?.(undefined) } catch {}
-      try { iter2.return?.(undefined) } catch {}
+      try { iter1.return?.(undefined) } catch { null }
+      try { iter2.return?.(undefined) } catch { null }
     }
   }
 
@@ -501,8 +503,8 @@ export class File extends Road {
     fs.appendFileSync(this.isAt, data_, options_)
   }
 
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isFile() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isFile() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isFile() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isFile() } catch (e) { if (throwOnError_) throw e; return false } }
 
   override isFile(): this is File { return true as const }
 }
@@ -513,7 +515,8 @@ export function file(...args: ConstructorParameters<typeof File>): File { return
 
 
 /** Helper type for filtering {@link Road} instances. */
-export type filter_t<T extends Road> = ((road: Road) => road is T)
+export type filter_t<T extends Road> = ((found: Road) => found is T)
+
 
 export class Folder extends Road {
   static async create(at_: string) {
@@ -591,52 +594,46 @@ export class Folder extends Road {
   }
 
   async find(name_: string): Promise<Road | null>
-  async find<T extends Road>(name_: string, expect_: road_t<T>): Promise<T | null>
-  async find<T extends Road>(name_: string, expect_?: road_t<T>): Promise<Road | T | null> {
+  async find<T extends Road>(name_: string, filter_: filter_t<T>): Promise<T | null>
+  async find<T extends Road>(name_: string, filter_?: filter_t<T>): Promise<Road | T | null> {
     try {
-      const found = await factory(this.join(name_))
-      if (!expect_)
+      const found = await road(this.join(name_))
+      if (!filter_ || filter_(found))
         return found
-      if (found instanceof expect_)
-        return found as T
       return null
-    }
-    catch { return null }
+    } catch { return null }
   }
   findSync(name_: string): Road | null
-  findSync<T extends Road>(name_: string, expect_: road_t<T>): T | null
-  findSync<T extends Road>(name_: string, expect_?: road_t<T>): Road | T | null {
+  findSync<T extends Road>(name_: string, filter_: filter_t<T>): T | null
+  findSync<T extends Road>(name_: string, filter_?: filter_t<T>): Road | T | null {
     try {
-      const found = factorySync(this.join(name_))
-      if (!expect_)
+      const found = roadSync(this.join(name_))
+      if (!filter_ || filter_(found))
         return found
-      if (found instanceof expect_)
-        return found as T
       return null
-    }
-    catch(e: unknown) { return null }
+    } catch { return null }
   }
 
   async add<T extends Road>(name_: string, createable_: { mk: (at: string) => Promise<T> }): Promise<T> {
     const newPath = this.join(name_)
     await createable_.mk(newPath)
-    return (await factory(newPath)) as unknown as T
+    return (await road(newPath)) as unknown as T
   }
   addSync<T extends Road>(name_: string, createable_: { mkSync: (at: string) => T }): T {
     const newPath = this.join(name_)
     createable_.mkSync(newPath)
-    return factorySync(newPath) as unknown as T
+    return roadSync(newPath) as unknown as T
   }
 
   async borrow<T extends Road>(createable_: { mk: (at: string) => Promise<T> }, cb_: (r: T) => Promise<void> | void): Promise<void> {
-    const path = this.join(`instrumentality@${crypto.randomUUID()}`)
-    try { await cb_(await createable_.mk(path)) }
-    finally { await fp.rm(path, { recursive: true, force: true }) }
+    const created = await createable_.mk(this.join(`instrumentality@${crypto.randomUUID()}`))
+    try { await cb_(created) }
+    finally { await fp.rm(created.isAt, { recursive: true, force: true }) }
   }
   borrowSync<T extends Road>(createable_: { mkSync: (at: string) => T }, cb_: (r: T) => void): void {
-    const path = this.join(`instrumentality@${crypto.randomUUID()}`)
-    try { cb_(createable_.mkSync(path)) }
-    finally { fs.rmSync(path, { recursive: true, force: true }) }
+    const created = createable_.mkSync(this.join(`instrumentality@${crypto.randomUUID()}`))
+    try { cb_(created) }
+    finally { fs.rmSync(created.isAt, { recursive: true, force: true }) }
   }
 
   async size(): Promise<number> {
@@ -652,8 +649,8 @@ export class Folder extends Road {
     return size
   }
 
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isDirectory() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isDirectory() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isDirectory() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isDirectory() } catch (e) { if (throwOnError_) throw e; return false } }
 
   override isFolder(): this is Folder { return true as const }
   override isDir(): this is Folder { return true as const }
@@ -663,13 +660,14 @@ export class Folder extends Road {
 
 export function folder(...args: ConstructorParameters<typeof Folder>): Folder { return new Folder(...args) }
 export function dir(...args: ConstructorParameters<typeof Folder>): Folder { return new Folder(...args) }
+export function directory(...args: ConstructorParameters<typeof Folder>): Folder { return new Folder(...args) }
 
 
 export function sysRoot() { return new Folder(ph.parse(process.cwd()).root, false) }
 export function home() { return new Folder(os.homedir(), false) }
 export function tmp() { return new Folder(os.tmpdir(), false) }
 export function here() { return new Folder(process.cwd(), false) }
-export { Folder as Dir, Folder as Directory, Folder as Dict, Folder as Dictionary }
+export { Folder as Dir, Folder as Directory }
 
 
 
@@ -688,10 +686,10 @@ export class SymbolicLink extends Road {
   static readonly mkSync: typeof SymbolicLink.createSync = SymbolicLink.createSync
 
   async target() {
-    return factory(ph.resolve(ph.dirname(this.isAt), await fp.readlink(this.isAt)))
+    return await road(ph.resolve(ph.dirname(this.isAt), await fp.readlink(this.isAt)))
   }
   targetSync() {
-    return factorySync(ph.resolve(ph.dirname(this.isAt), fs.readlinkSync(this.isAt)))
+    return roadSync(ph.resolve(ph.dirname(this.isAt), fs.readlinkSync(this.isAt)))
   }
   async retarget(to_: Road) {
     using _ = await this.lock()
@@ -716,8 +714,8 @@ export class SymbolicLink extends Road {
     fs.unlinkSync(this.isAt)
   }
 
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isSymbolicLink() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isSymbolicLink() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isSymbolicLink() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isSymbolicLink() } catch (e) { if (throwOnError_) throw e; return false } }
 
   override isSymlink(): this is SymbolicLink { return true as const }
   override isSymbolicLink(): this is SymbolicLink { return true as const }
@@ -731,55 +729,60 @@ export function symlink(...args: ConstructorParameters<typeof SymbolicLink>): Sy
 
 
 
+/**
+ * Represents a system-level resource that is not subject to modification.
+ * All modification operations will throw an error.
+ * 
+ * One could say 'this road truly is *unusable*.' hehe
+ */
 export abstract class UnusableRoad extends Road {
-  override readonly mutable = false as const // Modification will cause system issues (e.g. deleting a device file)
-  async size(): Promise<0> { return 0 }
+  override readonly mutable: never = false as never // Modification will cause system issues (e.g. deleting a device file)
+  size(): Promise<0> { return Promise.resolve(0) }
   sizeSync(): 0 { return 0 }
   error(): never { throw new Err(`${this.constructor.name} at '${this.isAt}' is a system-level resource thus not subject to modification.`) }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be locked */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be locked */
   override lock(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be locked */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be locked */
   override lockSync(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be deleted */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be deleted */
   override delete(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be deleted */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be deleted */
   override deleteSync(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be moved */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be moved */
   override move(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be moved */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be moved */
   override moveSync(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be copied */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be copied */
   override copy(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be copied */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be copied */
   override copySync(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be renamed */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be renamed */
   override rename(): never { return this.error() }
-  /** @deprecated System-level resources (UnusableRoad) can't/shouldn't be renamed */
+  /** @deprecated System-level resources ({@link UnusableRoad}) can't/shouldn't be renamed */
   override renameSync(): never { return this.error() }
-
   override isUnusable(): this is UnusableRoad { return true as const }
 }
 export class BlockDevice extends UnusableRoad {
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isBlockDevice() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isBlockDevice() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isBlockDevice() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isBlockDevice() } catch (e) { if (throwOnError_) throw e; return false } }
   override isBlockDevice(): this is BlockDevice { return true as const }
 }
 export function blockDevice(...args: ConstructorParameters<typeof BlockDevice>): BlockDevice { return new BlockDevice(...args) }
 export class CharacterDevice extends UnusableRoad {
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isCharacterDevice() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isCharacterDevice() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isCharacterDevice() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isCharacterDevice() } catch (e) { if (throwOnError_) throw e; return false } }
   override isCharacterDevice(): this is CharacterDevice { return true as const }
 }
 export function characterDevice(...args: ConstructorParameters<typeof CharacterDevice>): CharacterDevice { return new CharacterDevice(...args) }
 export class Fifo extends UnusableRoad {
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isFIFO() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isFIFO() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isFIFO() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isFIFO() } catch (e) { if (throwOnError_) throw e; return false } }
   override isFifo(): this is Fifo { return true as const }
 }
 export function fifo(...args: ConstructorParameters<typeof Fifo>): Fifo { return new Fifo(...args) }
 export class Socket extends UnusableRoad {
-  async check(): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isSocket() } catch { return false } }
-  checkSync(): boolean { try { return fs.lstatSync(this.isAt).isSocket() } catch { return false } }
+  async check(throwOnError_: boolean): Promise<boolean> { try { return (await fp.lstat(this.isAt)).isSocket() } catch (e) { if (throwOnError_) throw e; return false } }
+  checkSync(throwOnError_: boolean): boolean { try { return fs.lstatSync(this.isAt).isSocket() } catch (e) { if (throwOnError_) throw e; return false } }
   override isSocket(): this is Socket { return true as const }
 }
 export function socket(...args: ConstructorParameters<typeof Socket>): Socket { return new Socket(...args) }
