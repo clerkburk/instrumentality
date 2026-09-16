@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import * as cr from "node:crypto"
 import * as fs from "node:fs"; import { constants as fsc } from "node:fs"
 import * as fp from "node:fs/promises"
@@ -78,19 +79,28 @@ export let lockedRoads: Map<string, Promise<void>> | null = null
  * It is more like a memory representation, similar to a pointer in low-level programming languages; other processes might mess with the underlying entry. There are methods to check for consistency, but they are not guaranteed to be foolproof.
  */
 export abstract class Road {
-  /** The absolute path to the file or directory that this Road instance represents.
+  /** The absolute path to the entry that this Road instance represents.
    * @remarks Intentionally made protected to prevent external modification, as changing this value could lead to inconsistencies and unexpected behavior. */
   protected pointsTo: string
-  /** Indicates whether the file or directory represented by this Road instance can be modified.
+  /** Indicates which operations are allowed on the entry represented by this Road instance.
    * Changing this value does not affect the actual file system permissions, but rather serves as a safeguard within the application to prevent accidental modifications. */
-  mutable: boolean = true
+  writable = true
+  moveable = true
+  deletable = true
+  copyable = true
+  renameable = true
+  assertWrite() { if (!this.writable) throw new Err(`Road to '${this.isAt}' isn't writable.`) }
+  assertMove() { if (!this.moveable) throw new Err(`Road to '${this.isAt}' isn't moveable.`) }
+  assertDelete() { if (!this.deletable) throw new Err(`Road to '${this.isAt}' isn't deletable.`) }
+  assertCopy() { if (!this.copyable) throw new Err(`Road to '${this.isAt}' isn't copyable.`) }
+  assertRename() { if (!this.renameable) throw new Err(`Road to '${this.isAt}' isn't renameable.`) }
 
   // Quick accessors
   /** Copy of the absolute path. */
   get isAt() { return this.pointsTo }
   /** Name of the road without the path (including extensions). */
   get name() { return this.isAt.slice(this.isAt.lastIndexOf(ph.sep) + 1) }
-  /** The amount of path segments in the absolute path to the file or directory represented by this Road instance, minus one (i.e., the depth of the path in the file system hierarchy). */
+  /** The amount of path segments in the absolute path to the entry represented by this Road instance, minus one (i.e., the depth of the path in the file system hierarchy). */
   get depth() { return this.isAt.split(ph.sep).length - 1 }
   /** Same as {@link isAt} but for compatibility with external APIs. */
   toString(): string { return this.isAt }
@@ -129,8 +139,6 @@ export abstract class Road {
   ancestors(): Folder[] { return [...this.ancestorsIt()] }
 
   protected reserveLock(allowConcurrent: boolean): Disposable & { previous: Promise<void> | undefined } {
-    if (!this.mutable)
-      throw new Err(`Road to '${this.isAt}' is immutable.`)
     lockedRoads ??= new Map()
     const { promise, resolve } = Promise.withResolvers<void>()
     const isAt = this.isAt
@@ -209,43 +217,51 @@ export abstract class Road {
 
   /** Wrapper around {@link fp.rm} with locking. */
   async delete(): Promise<void> {
+    this.assertDelete()
     using _ = await this.lock()
     await fp.rm(this.isAt, { recursive: true, force: true })
   }
   /** Wrapper around {@link fs.rmSync} with locking. */
   deleteSync(): void {
+    this.assertDelete()
     using _ = this.lockSync()
     fs.rmSync(this.isAt, { recursive: true, force: true })
   }
   async copy(into_: Folder): Promise<this> {
+    this.assertCopy()
     const newPath = into_.join(this.name)
     await fp.cp(this.isAt, newPath, { recursive: true, force: true })
     return new (this.constructor as new (path: string, typeCheck: boolean) => this)(newPath, false)
   }
   copySync(into_: Folder): this {
+    this.assertCopy()
     const newPath = into_.join(this.name)
     fs.cpSync(this.isAt, newPath, { recursive: true, force: true })
     return new (this.constructor as new (path: string, typeCheck: boolean) => this)(newPath, false)
   }
   async move(into_: Folder): Promise<void> {
+    this.assertMove()
     using _ = await this.lock()
     const newPath = into_.join(this.name)
     await fp.rename(this.isAt, newPath)
     this.pointsTo = newPath
   }
   moveSync(into_: Folder): void {
+    this.assertMove()
     using _ = this.lockSync()
     const newPath = into_.join(this.name)
     fs.renameSync(this.isAt, newPath)
     this.pointsTo = newPath
   }
   async rename(newName_: string): Promise<void> {
+    this.assertRename()
     using _ = await this.lock()
     const newPath = this.parent().join(newName_)
     await fp.rename(this.isAt, newPath)
     this.pointsTo = newPath
   }
   renameSync(newName_: string): void {
+    this.assertRename()
     using _ = this.lockSync()
     const newPath = this.parent().join(newName_)
     fs.renameSync(this.isAt, newPath)
@@ -434,16 +450,20 @@ export class File extends Road {
   sizeSync(): number { return this.lstatSync().size }
 
   async writeAtomic(data_: Buffer | string, options_?: fs.WriteFileOptions) {
+    this.assertWrite()
     using _ = await this.lock()
     await this.parent().borrow(File, async tmp => {
+      tmp.assertWrite()
       using _ = await tmp.lock()
       await fp.writeFile(tmp.isAt, data_, options_)
       await fp.rename(tmp.isAt, this.isAt)
     })
   }
   writeAtomicSync(data_: Buffer | string, options_?: fs.WriteFileOptions) {
+    this.assertWrite()
     using _ = this.lockSync()
     this.parent().borrowSync(File, tmp => {
+      tmp.assertWrite()
       using _ = tmp.lockSync()
       fs.writeFileSync(tmp.isAt, data_, options_)
       fs.renameSync(tmp.isAt, this.isAt)
@@ -451,14 +471,17 @@ export class File extends Road {
   }
 
   async write(data_: Buffer | string, options_?: fs.WriteFileOptions) {
+    this.assertWrite()
     using _ = await this.lock()
     await fp.writeFile(this.isAt, data_, options_)
   }
   writeSync(data_: Buffer | string, options_?: fs.WriteFileOptions) {
+    this.assertWrite()
     using _ = this.lockSync()
     fs.writeFileSync(this.isAt, data_, options_)
   }
   async writePast(offset_: number, data_: Buffer | string) {
+    this.assertWrite()
     using _ = await this.lock()
     const fd = await fp.open(this.isAt, 'r+')
     try {
@@ -467,6 +490,7 @@ export class File extends Road {
     } finally { await fd.close() }
   }
   writePastSync(offset_: number, data_: Buffer | string) {
+    this.assertWrite()
     using _ = this.lockSync()
     const fd = fs.openSync(this.isAt, 'r+')
     try {
@@ -475,6 +499,7 @@ export class File extends Road {
     } finally { fs.closeSync(fd) }
   }
   async truncWritePast(offset_: number, data_: Buffer | string) {
+    this.assertWrite()
     using _ = await this.lock()
     const fd = await fp.open(this.isAt, 'r+')
     try {
@@ -485,6 +510,7 @@ export class File extends Road {
     finally { await fd.close() }
   }
   truncWritePastSync(offset_: number, data_: Buffer | string) {
+    this.assertWrite()
     using _ = this.lockSync()
     const fd = fs.openSync(this.isAt, 'r+')
     try {
@@ -495,10 +521,12 @@ export class File extends Road {
     finally { fs.closeSync(fd) }
   }
   async append(data_: Buffer | string, options_?: fs.WriteFileOptions) {
+    this.assertWrite()
     using _ = await this.lock()
     await fp.appendFile(this.isAt, data_, options_)
   }
   appendSync(data_: Buffer | string, options_?: fs.WriteFileOptions) {
+    this.assertWrite()
     using _ = this.lockSync()
     fs.appendFileSync(this.isAt, data_, options_)
   }
@@ -615,11 +643,13 @@ export class Folder extends Road {
   }
 
   async add<T extends Road>(name_: string, createable_: { mk: (at: string) => Promise<T> }): Promise<T> {
+    this.assertWrite()
     const newPath = this.join(name_)
     await createable_.mk(newPath)
     return (await road(newPath)) as unknown as T
   }
   addSync<T extends Road>(name_: string, createable_: { mkSync: (at: string) => T }): T {
+    this.assertWrite()
     const newPath = this.join(name_)
     createable_.mkSync(newPath)
     return roadSync(newPath) as unknown as T
@@ -692,11 +722,15 @@ export class SymbolicLink extends Road {
     return roadSync(ph.resolve(ph.dirname(this.isAt), fs.readlinkSync(this.isAt)))
   }
   async retarget(to_: Road) {
+    this.assertDelete()
+    this.assertWrite()
     using _ = await this.lock()
     await fp.unlink(this.isAt)
     await fp.symlink(to_.isAt, this.isAt)
   }
   retargetSync(to_: Road) {
+    this.assertDelete()
+    this.assertWrite()
     using _ = this.lockSync()
     fs.unlinkSync(this.isAt)
     fs.symlinkSync(to_.isAt, this.isAt)
@@ -706,10 +740,12 @@ export class SymbolicLink extends Road {
   sizeSync(): number { return this.lstatSync().size }
 
   override async delete() {
+    this.assertDelete()
     using _ = await this.lock()
     await fp.unlink(this.isAt)
   }
   override deleteSync() {
+    this.assertDelete()
     using _ = this.lockSync()
     fs.unlinkSync(this.isAt)
   }
@@ -736,7 +772,11 @@ export function symlink(...args: ConstructorParameters<typeof SymbolicLink>): Sy
  * One could say 'this road truly is *unusable*.' hehe
  */
 export abstract class UnusableRoad extends Road {
-  override readonly mutable: never = false as never // Modification will cause system issues (e.g. deleting a device file)
+  // Modification will cause system issues (e.g. deleting a device file)
+  override readonly writable = false as never
+  override readonly moveable = false as never
+  override readonly deletable = false as never
+  override readonly copyable = false as never 
   size(): Promise<0> { return Promise.resolve(0) }
   sizeSync(): 0 { return 0 }
   error(): never { throw new Err(`${this.constructor.name} at '${this.isAt}' is a system-level resource thus not subject to modification.`) }
