@@ -263,3 +263,19 @@ export function decode122(base122_: string) {
 
   return Uint8Array.from(out)
 }
+
+
+
+/**
+ * Wraps a function to ensure it is called with the correct context.
+ * 
+ * @param fn_ - The function to wrap.
+ * @returns A new function that applies the original function with the appropriate context.
+ */
+export function wFn<Args extends unknown[]>(fn_: (...args: Args) => unknown) {
+  return function(this: unknown, ...args: Args) {
+    const context = this ?? (typeof document !== 'undefined' && fn_.toString().includes('Native') ? globalThis : globalThis)
+    return Reflect.apply(fn_, context, args)
+  }
+}
+export { wFn as wrapFunction }

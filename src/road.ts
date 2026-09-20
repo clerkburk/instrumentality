@@ -72,6 +72,15 @@ export let lockedRoads: Map<string, Promise<void>> | null = null
 
 
 /**
+ * The default path separator that is recognized/supported by this module.
+ * 
+ * \\ is intentionally not used as the default separator to maintain consistency across different operating systems. (Windows supports both \\ and /, but / is preferred here.)
+ */
+export const PH_SEP = '/' as const
+
+
+
+/**
  * Road is an OOP, pointer-like representation of an entry in the local file system. It wraps around the Node.js fs module and provides a more convenient access to it.
  * It's meant to help the user mentally model an entry and help them reason about it, as well as provide a more convenient API and guardrails for common operations.
  * 
@@ -99,9 +108,9 @@ export abstract class Road {
   /** Copy of the absolute path. */
   get isAt() { return this.pointsTo }
   /** Name of the road without the path (including extensions). */
-  get name() { return this.isAt.slice(this.isAt.lastIndexOf(ph.sep) + 1) }
+  get name() { return this.isAt.slice(this.isAt.lastIndexOf(PH_SEP) + 1) }
   /** The amount of path segments in the absolute path to the entry represented by this Road instance, minus one (i.e., the depth of the path in the file system hierarchy). */
-  get depth() { return this.isAt.split(ph.sep).length - 1 }
+  get depth() { return this.isAt.split(PH_SEP).length - 1 }
   /** Same as {@link isAt} but for compatibility with external APIs. */
   toString(): string { return this.isAt }
 
@@ -115,6 +124,7 @@ export abstract class Road {
    */
   constructor(path_: string, typeCheck_: boolean) {
     this.pointsTo = ph.resolve(path_)
+    this.pointsTo = this.pointsTo.replace(/\\/g, PH_SEP)
     if (typeCheck_ && !this.checkSync(true))
       throw new Err(`Type mismatch: '${this.isAt}'`)
   }
@@ -255,6 +265,8 @@ export abstract class Road {
   }
   async rename(newName_: string): Promise<void> {
     this.assertRename()
+    if (newName_.includes('/') || newName_.includes('\\'))
+      throw new Error('New name cannot contain path separators.')
     using _ = await this.lock()
     const newPath = this.parent().join(newName_)
     await fp.rename(this.isAt, newPath)
@@ -262,6 +274,8 @@ export abstract class Road {
   }
   renameSync(newName_: string): void {
     this.assertRename()
+    if (newName_.includes('/') || newName_.includes('\\'))
+      throw new Error('New name cannot contain path separators.')
     using _ = this.lockSync()
     const newPath = this.parent().join(newName_)
     fs.renameSync(this.isAt, newPath)
