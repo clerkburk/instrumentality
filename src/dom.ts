@@ -1,4 +1,11 @@
 /**
+ * A type representing a constructor for an `HTMLElement`.
+ */
+export type HTMLElement_t = new (...args: unknown[]) => HTMLElement
+
+
+
+/**
  * Resolves on `DOMContentLoaded` or immediately if the document is already ready.
  */
 export function onceReady(): Promise<void> {
@@ -8,19 +15,20 @@ export function onceReady(): Promise<void> {
 }
 
 
-
 /**
  * Typed accessor for {@link document.getElementById}
  *
  * @param id_ - The ID of the element to retrieve.
- * @param type_ - Expected type, defaults to {@link HTMLElement}.
- * @returns The corresponding element if found and of the expected type, otherwise `null`.
+ * @param types_ - Expected type(s).
+ * @returns The corresponding element if found and of the expected types, otherwise `null`.
  */
-export function byId<T extends HTMLElement>(id_: string, type_: new () => T): T | null {
+export function byId<T extends HTMLElement_t | readonly HTMLElement_t[]>(id_: string, types_: T): InstanceType<T extends readonly HTMLElement_t[] ? T[number] : T> | null {
   const element = document.getElementById(id_)
-  if (element instanceof type_)
-    return element
-  return null
+  if (!element) return null
+  const typesArr = Array.isArray(types_) ? types_ : [types_]
+  return typesArr.some(t => element instanceof t)
+    ? (element as InstanceType<T extends readonly HTMLElement_t[] ? T[number] : T>)
+    : null;
 }
 
 
@@ -28,11 +36,14 @@ export function byId<T extends HTMLElement>(id_: string, type_: new () => T): T 
  * Typed accessor for {@link document.getElementsByClassName}
  *
  * @param className_ - The class name of the elements to retrieve.
- * @param type_ - The constructor function for the expected element type.
+ * @param types_ - The constructor function(s) for the expected element type(s).
  * @returns All elements with the specified class name and type.
  */
-export function byClass<T extends HTMLElement>(className_: string, type_: new () => T): T[] {
-  return [...document.getElementsByClassName(className_)].filter((el): el is T => el instanceof type_)
+export function byClass<T extends HTMLElement_t | readonly HTMLElement_t[]>(className_: string, types_: T): InstanceType<T extends readonly HTMLElement_t[] ? T[number] : T>[] {
+  return Array.from(document.getElementsByClassName(className_)).filter(
+    (el): el is InstanceType<T extends readonly HTMLElement_t[] ? T[number] : T> =>
+      (Array.isArray(types_) ? types_ : [types_]).some((type) => el instanceof type)
+  )
 }
 
 
@@ -44,6 +55,16 @@ export function byClass<T extends HTMLElement>(className_: string, type_: new ()
  */
 export function byTag<K extends keyof HTMLElementTagNameMap>(tag_: K): HTMLElementTagNameMap[K][] {
   return [...document.getElementsByTagName(tag_)]
+}
+
+/**
+ * Creates a new HTML element with the specified tag name.
+ *
+ * @param tag_ - The HTML tag name of the element to create.
+ * @returns The newly created element.
+ */
+export function createTag<K extends keyof HTMLElementTagNameMap>(tag_: K, options_?: ElementCreationOptions): HTMLElementTagNameMap[K] {
+  return document.createElement(tag_, options_)
 }
 
 
