@@ -272,10 +272,69 @@ export function decode122(base122_: string) {
  * @param fn_ - The function to wrap.
  * @returns A new function that applies the original function with the appropriate context.
  */
-export function wFn<Args extends unknown[]>(fn_: (...args: Args) => unknown) {
+export function wFn<T, Args extends unknown[]>(fn_: (...args: Args) => T) {
   return function(this: unknown, ...args: Args) {
     const context = this ?? (typeof document !== 'undefined' && fn_.toString().includes('Native') ? globalThis : globalThis)
     return Reflect.apply(fn_, context, args)
   }
 }
 export { wFn as wrapFunction }
+
+
+
+/**
+ * Encrypts data into self-contained gibberish with a randomly generated AES-GCM key.
+ *
+ * @param data_ - The input data to be encrypted, either as a Blob or BufferSource (Uint8Array, ArrayBuffer, etc.).
+ * @returns Both the encrypted data payload ([12-byte IV + ciphertext]) and the key used for encryption.
+ * @throws If the encryption process fails for any reason.
+ */
+export async function gibberishify(data_: BufferSource | Blob): Promise<{ encryptedData: Uint8Array; key: Uint8Array }> {
+  const data: BufferSource = data_ instanceof Blob ? await data_.arrayBuffer() : data_
+  const rawKey = globalThis.crypto.getRandomValues(new Uint8Array(32))
+  const iv = globalThis.crypto.getRandomValues(new Uint8Array(12))
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    rawKey,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"]
+  )
+  const ciphertext = await globalThis.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    data
+  )
+  const payload = new Uint8Array(12 + ciphertext.byteLength)
+  payload.set(iv, 0)
+  payload.set(new Uint8Array(ciphertext), 12)
+  return { encryptedData: payload, key: rawKey }
+}
+
+
+/**
+ * Decrypts data produced by {@link gibberishify}.
+ * 
+ * @param encryptedData_ - The [12-byte IV + ciphertext] payload.
+ * @param key_ - The 32-byte raw AES key returned by gibberishify.
+ * @returns The decrypted raw ArrayBuffer.
+ */
+export async function degibberishify(encryptedData_: BufferSource, key_: BufferSource): Promise<ArrayBuffer> {
+  const payload = ArrayBuffer.isView(encryptedData_)
+    ? new Uint8Array(encryptedData_.buffer, encryptedData_.byteOffset, encryptedData_.byteLength)
+    : new Uint8Array(encryptedData_)
+  const iv = payload.subarray(0, 12)
+  const ciphertext = payload.subarray(12)
+  const key = await globalThis.crypto.subtle.importKey(
+    "raw",
+    key_,
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"]
+  )
+  return globalThis.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    key,
+    ciphertext
+  )
+}
