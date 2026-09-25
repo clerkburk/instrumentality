@@ -1,5 +1,5 @@
 /** Subclass of {@link Error} that represents an error thrown from this library, providing a specific name for easier identification. */
-export class Err extends Error { override name = "Instrumentality-Error" }
+export class Err extends Error { override name = 'Instrumentality-Error' }
 export { Err as InsErr }
 
 
@@ -124,40 +124,42 @@ export class Benchmark {
   get ps() { return this.ns * 1e3 }
 }
 export { Benchmark as Bench, Benchmark as Timer, Benchmark as Stopwatch }
+/** Alias for creating a new Benchmark instance. */
+export function bench(...args: ConstructorParameters<typeof Benchmark>) { return new Benchmark(...args) }
 
 
 
 /** Compiler sugar to hide mutating methods/properties for read-only operations (no runtime effect). */
 export type Uint8ArrayView = Pick<Uint8Array,
-  | "at"
-  | "includes"
-  | "indexOf"
-  | "lastIndexOf"
-  | "find"
-  | "findIndex"
-  | "findLast"
-  | "findLastIndex"
-  | "every"
-  | "some"
-  | "forEach"
-  | "entries"
-  | "keys"
-  | "values"
+  | 'at'
+  | 'includes'
+  | 'indexOf'
+  | 'lastIndexOf'
+  | 'find'
+  | 'findIndex'
+  | 'findLast'
+  | 'findLastIndex'
+  | 'every'
+  | 'some'
+  | 'forEach'
+  | 'entries'
+  | 'keys'
+  | 'values'
   | typeof Symbol.iterator
-  | "reduce"
-  | "reduceRight"
-  | "join"
-  | "toLocaleString"
-  | "toString"
-  | "map"
-  | "filter"
-  | "slice"
-  | "toReversed"
-  | "toSorted"
-  | "with"
-  | "length"
-  | "byteLength"
-  | "byteOffset"
+  | 'reduce'
+  | 'reduceRight'
+  | 'join'
+  | 'toLocaleString'
+  | 'toString'
+  | 'map'
+  | 'filter'
+  | 'slice'
+  | 'toReversed'
+  | 'toSorted'
+  | 'with'
+  | 'length'
+  | 'byteLength'
+  | 'byteOffset'
 > & { readonly [n: number]: number }
 
 
@@ -219,7 +221,7 @@ export function encode122(data_: ArrayLike<number>): string {
       out[outIndex++] = 0b10000000 | (payload & 0b00111111)
     }
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(out.subarray(0, outIndex))
+  return new TextDecoder('utf-8', { fatal: true }).decode(out.subarray(0, outIndex))
 }
 
 
@@ -274,8 +276,7 @@ export function decode122(base122_: string) {
  */
 export function wFn<T, Args extends unknown[]>(fn_: (...args: Args) => T) {
   return function(this: unknown, ...args: Args) {
-    const context = this ?? (typeof document !== 'undefined' && fn_.toString().includes('Native') ? globalThis : globalThis)
-    return Reflect.apply(fn_, context, args)
+    return Reflect.apply(fn_, this ?? globalThis, args)
   }
 }
 export { wFn as wrapFunction }
@@ -289,21 +290,19 @@ export { wFn as wrapFunction }
  * @returns Both the encrypted data payload ([12-byte IV + ciphertext]) and the key used for encryption.
  * @throws If the encryption process fails for any reason.
  */
-export async function gibberishify(data_: BufferSource | Blob): Promise<{ encryptedData: Uint8Array; key: Uint8Array }> {
-  const data: BufferSource = data_ instanceof Blob ? await data_.arrayBuffer() : data_
+export async function gibberishify(data_: BufferSource | Blob) {
   const rawKey = globalThis.crypto.getRandomValues(new Uint8Array(32))
   const iv = globalThis.crypto.getRandomValues(new Uint8Array(12))
-  const key = await globalThis.crypto.subtle.importKey(
-    "raw",
-    rawKey,
-    { name: "AES-GCM" },
-    false,
-    ["encrypt"]
-  )
   const ciphertext = await globalThis.crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    data
+    { name: 'AES-GCM', iv },
+    await globalThis.crypto.subtle.importKey(
+      'raw',
+      rawKey,
+      { name: 'AES-GCM' },
+      false,
+      ['encrypt']
+    ),
+    data_ instanceof Blob ? await data_.arrayBuffer() : data_
   )
   const payload = new Uint8Array(12 + ciphertext.byteLength)
   payload.set(iv, 0)
@@ -315,26 +314,22 @@ export async function gibberishify(data_: BufferSource | Blob): Promise<{ encryp
 /**
  * Decrypts data produced by {@link gibberishify}.
  * 
- * @param encryptedData_ - The [12-byte IV + ciphertext] payload.
- * @param key_ - The 32-byte raw AES key returned by gibberishify.
+ * @param gibberish - The object containing the [12-byte IV + ciphertext] payload and the raw AES key.
  * @returns The decrypted raw ArrayBuffer.
+ * @remarks It's highly recommended to only use this function with gibberish produced by {@link gibberishify}.
  */
-export async function degibberishify(encryptedData_: BufferSource, key_: BufferSource): Promise<ArrayBuffer> {
-  const payload = ArrayBuffer.isView(encryptedData_)
-    ? new Uint8Array(encryptedData_.buffer, encryptedData_.byteOffset, encryptedData_.byteLength)
-    : new Uint8Array(encryptedData_)
-  const iv = payload.subarray(0, 12)
-  const ciphertext = payload.subarray(12)
-  const key = await globalThis.crypto.subtle.importKey(
-    "raw",
-    key_,
-    { name: "AES-GCM" },
-    false,
-    ["decrypt"]
-  )
+export async function degibberishify(gibberish: Awaited<ReturnType<typeof gibberishify>>): Promise<ArrayBuffer> {
+  const iv = gibberish.encryptedData.subarray(0, 12)
+  const ciphertext = gibberish.encryptedData.subarray(12)
   return globalThis.crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    key,
+    { name: 'AES-GCM', iv },
+    await globalThis.crypto.subtle.importKey(
+      'raw',
+      gibberish.key,
+      { name: 'AES-GCM' },
+      false,
+      ['decrypt']
+    ),
     ciphertext
   )
 }

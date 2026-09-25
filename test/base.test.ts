@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import * as v from "vitest"
 import * as bs from "../src/base.ts"
 
@@ -317,5 +318,206 @@ v.describe("encode122 + decode122", () => {
 
     const invalidMarker = String.fromCharCode(0xc600)
     v.expect(() => bs.decode122(invalidMarker)).toThrow(/Invalid base-122 illegal index 6/i)
+  })
+})
+
+
+
+v.describe("wFn / wrapFunction", () => {
+  v.it("is exported under both names, pointing to the same function", () => {
+    v.expect(bs.wrapFunction).toBe(bs.wFn)
+  })
+
+  v.it("preserves an explicitly-provided `this` via call/apply/bind", () => {
+    const counter = { count: 5, increment() { return ++this.count } }
+    const detached = counter.increment
+    const wrapped = bs.wFn(detached)
+
+    v.expect(wrapped.call(counter)).toBe(6)
+    v.expect(wrapped.apply(counter)).toBe(7)
+    v.expect(wrapped.bind(counter)()).toBe(8)
+  })
+
+  v.it("falls back to globalThis when called with no receiver (the classic 'detached method' footgun) -- it does NOT restore the original receiver", () => {
+    const counter = { count: 5, increment() { return ++this.count } }
+    const wrapped = bs.wFn(counter.increment)
+
+    ;(globalThis as any).count = 100
+    try {
+      v.expect(wrapped()).toBe(101)
+      v.expect(counter.count).toBe(5) // untouched -- the fallback hit globalThis, not counter
+    } finally { delete (globalThis as any).count }
+  })
+
+  v.it("does NOT replace falsy-but-defined `this` values (0, '', false) -- only null/undefined trigger the globalThis fallback", () => {
+    function getThis(this: unknown) { return this }
+    const wrapped = bs.wFn(getThis)
+
+    v.expect(wrapped.call(0)).toBe(0)
+    v.expect(wrapped.call("")).toBe("")
+    v.expect(wrapped.call(false)).toBe(false)
+    v.expect(wrapped.call(null)).toBe(globalThis)
+    v.expect(wrapped.call(undefined)).toBe(globalThis)
+  })
+
+  v.it("forwards arguments and return values through unchanged", () => {
+    const wrapped = bs.wFn((a: number, b: number, c: number) => a + b * c)
+    v.expect(wrapped(1, 2, 3)).toBe(7)
+  })
+
+  v.it("propagates thrown errors from the wrapped function synchronously", () => {
+    const wrapped = bs.wFn(() => { throw new bs.Err("boom") })
+    v.expect(() => wrapped()).toThrow(bs.Err)
+    v.expect(() => wrapped()).toThrow("boom")
+  })
+
+  v.it("supports async functions, forwarding the returned promise as-is (resolve and reject)", async () => {
+    const resolves = bs.wFn(async (x: number) => { await Promise.resolve(); return x * 2 })
+    await v.expect(resolves(21)).resolves.toBe(42)
+
+    const rejects = bs.wFn(async () => { throw new bs.Err("async boom") })
+    await v.expect(rejects()).rejects.toThrow("async boom")
+  })
+
+  v.it("supports generator functions, returning a working generator bound to the given receiver", () => {
+    function* gen(this: { start: number }, n: number) {
+      for (let i = 0; i < n; i++) yield this.start + i
+    }
+    const wrapped = bs.wFn(gen)
+    v.expect([...wrapped.call({ start: 10 }, 3)]).toEqual([10, 11, 12])
+  })
+
+  v.it("works when used as a constructor with `new` (the returned wrapper is a plain function, not an arrow)", () => {
+    function Point(this: { x: number, y: number }, x: number, y: number) { this.x = x; this.y = y }
+    const WrappedPoint = bs.wFn(Point) as unknown as new (x: number, y: number) => { x: number, y: number }
+    v.expect(new WrappedPoint(3, 4)).toEqual({ x: 3, y: 4 })
+  })
+
+  v.it("re-wrapping an already-wrapped function composes correctly", () => {
+    const base = function(this: { n: number }) { return this.n * 2 }
+    const doubleWrapped = bs.wFn(bs.wFn(base))
+    v.expect(doubleWrapped.call({ n: 5 })).toBe(10)
+  })
+})
+
+
+
+v.describe("gibberishify + degibberishify", () => {
+  v.it("round-trips text data via a Uint8Array", async () => {
+    const original = new TextEncoder().encode("Hello, world! \u{1F30D}")
+    const gibberish = await bs.gibberishify(original)
+    v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(original)
+  })
+
+  v.it("round-trips empty input", async () => {
+    const gibberish = await bs.gibberishify(new Uint8Array(0))
+    v.expect(gibberish.encryptedData.byteLength).toBe(12 + 16) // iv + empty ciphertext + 16-byte auth tag
+    v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(new Uint8Array(0))
+  })
+
+  v.it("round-trips a Blob", async () => {
+    const original = new TextEncoder().encode("Blob-backed payload")
+    const gibberish = await bs.gibberishify(new Blob([original]))
+    v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(original)
+  })
+
+  v.it("round-trips ArrayBuffer, DataView, and Uint8Array views of the same bytes identically", async () => {
+    const original = new Uint8Array([1, 2, 3, 4, 5, 255, 0, 128])
+    const asArrayBuffer = original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength)
+    const asDataView = new DataView(asArrayBuffer.slice(0))
+
+    for (const input of [original, asArrayBuffer, asDataView] as const) {
+      const gibberish = await bs.gibberishify(input)
+      v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(original)
+    }
+  })
+
+  v.it("round-trips an offset subarray view without leaking neighboring bytes", async () => {
+    const backing = new Uint8Array([9, 9, 9, 1, 2, 3, 4, 5, 9, 9, 9])
+    const view = backing.subarray(3, 8)
+    const gibberish = await bs.gibberishify(view)
+    v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(new Uint8Array([1, 2, 3, 4, 5]))
+  })
+
+  v.it("rejects SharedArrayBuffer-backed views (WebCrypto disallows them, confirming the BufferSource type constraint is correct)", async () => {
+    const shared = new SharedArrayBuffer(32)
+    const view = new Uint8Array(shared)
+    view.set(new TextEncoder().encode("shared-memory payload!"))
+
+    // Cast needed since SharedArrayBuffer-backed views aren't assignable to BufferSource per lib.dom.d.ts.
+    await v.expect(bs.gibberishify(view as unknown as Uint8Array<ArrayBuffer>)).rejects.toThrow(/SharedArrayBuffer/i)
+  })
+
+  v.it("produces a fresh random key, IV, and ciphertext on every call, even for identical input", async () => {
+    const data = new TextEncoder().encode("same input, every time")
+    const runs = await Promise.all(Array.from({ length: 20 }, () => bs.gibberishify(data)))
+
+    v.expect(new Set(runs.map(r => Buffer.from(r.key).toString("hex"))).size).toBe(runs.length)
+    v.expect(new Set(runs.map(r => Buffer.from(r.encryptedData).toString("hex"))).size).toBe(runs.length)
+
+    for (const run of runs)
+      v.expect(new Uint8Array(await bs.degibberishify(run))).toEqual(data)
+  })
+
+  v.it("keeps key (32 bytes) and payload framing fixed regardless of input size", async () => {
+    for (const size of [0, 1, 15, 16, 17, 1024, 65536]) {
+      const data = globalThis.crypto.getRandomValues(new Uint8Array(size))
+      const gibberish = await bs.gibberishify(data)
+      v.expect(gibberish.key.byteLength).toBe(32)
+      v.expect(gibberish.encryptedData.byteLength).toBe(12 + size + 16) // iv + ciphertext + auth tag
+    }
+  })
+
+  v.it("fails to decrypt with the wrong key", async () => {
+    const gibberish = await bs.gibberishify(new TextEncoder().encode("top secret"))
+    const wrongKey = globalThis.crypto.getRandomValues(new Uint8Array(32))
+    await v.expect(bs.degibberishify({ ...gibberish, key: wrongKey })).rejects.toThrow()
+  })
+
+  v.it("rejects if a single bit anywhere in the IV, ciphertext, or auth tag is flipped", async () => {
+    const data = new TextEncoder().encode("tamper-evident payload, long enough to span multiple ciphertext bytes")
+    const gibberish = await bs.gibberishify(data)
+    const len = gibberish.encryptedData.byteLength
+
+    const positions = [...new Set([0, 1, 11, 12, 13, Math.floor(len / 2), len - 16, len - 1])]
+    for (const pos of positions)
+      for (const bit of [0, 3, 7]) {
+        const tampered = gibberish.encryptedData.slice()
+        tampered[pos] ^= (1 << bit)
+        await v.expect(bs.degibberishify({ encryptedData: tampered, key: gibberish.key })).rejects.toThrow()
+      }
+  })
+
+  v.it("rejects encryptedData too short to contain an IV + auth tag", async () => {
+    const key = globalThis.crypto.getRandomValues(new Uint8Array(32))
+    for (const len of [0, 1, 11, 12, 20, 27])
+      await v.expect(bs.degibberishify({ encryptedData: new Uint8Array(len), key })).rejects.toThrow()
+  })
+
+  v.it("round-trips all-zero and all-0xff buffers (pathological low-entropy input)", async () => {
+    for (const fill of [0x00, 0xff]) {
+      const data = new Uint8Array(4096).fill(fill)
+      const gibberish = await bs.gibberishify(data)
+      v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(data)
+    }
+  })
+
+  v.it("round-trips large (1MB) random data", async () => {
+    // getRandomValues caps out at 65,536 bytes per call, so fill in chunks.
+    const data = new Uint8Array(1024 * 1024)
+    for (let offset = 0; offset < data.length; offset += 65536)
+      globalThis.crypto.getRandomValues(data.subarray(offset, offset + 65536))
+    const gibberish = await bs.gibberishify(data)
+    v.expect(new Uint8Array(await bs.degibberishify(gibberish))).toEqual(data)
+  })
+
+  v.it("survives 100 concurrent encrypt/decrypt round-trips without cross-contamination", async () => {
+    const inputs = Array.from({ length: 100 }, (_, i) => new TextEncoder().encode(`payload #${i}`))
+    const results = await Promise.all(inputs.map(async (data, i) => {
+      const gibberish = await bs.gibberishify(data)
+      const decrypted = new TextDecoder().decode(await bs.degibberishify(gibberish))
+      return decrypted === `payload #${i}`
+    }))
+    v.expect(results.every(Boolean)).toBe(true)
   })
 })

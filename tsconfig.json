@@ -11,8 +11,8 @@
     // Environment Settings
     "module": "nodenext",
     "target": "esnext",
-    "lib": ["esnext", "dom"],
-    "types": ["node"],
+    "lib": ["esnext"],
+    "types": [],
     "isolatedModules": true,
     "moduleDetection": "auto",
     "verbatimModuleSyntax": true,

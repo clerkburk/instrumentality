@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 /**
  * A type representing a constructor for an `HTMLElement`.
  */
